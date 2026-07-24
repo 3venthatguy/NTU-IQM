@@ -23,6 +23,9 @@ Only needed if you don't use the pretrained `models/mp_20/` checkpoint.
 python scigen/run.py data=mp_20 model=diffusion_w_type expname=<name>
 # carbon-native (for CNTs) — see RETRAIN_CARBON.md:
 python scigen/run.py data=carbon_24 model=diffusion_w_type expname=cnt_carbon24
+# nanotube-native (for alx; fixes the mp_20-is-OOD decoration problem) — see RETRAIN_ALX.md:
+#   first: python data/alx_1D/build_train_csv.py   (pkl → train/val/test.csv, needs pymatgen)
+python scigen/run.py data=alx_1d model=diffusion_w_type expname=alx_1d
 # smoke test (resolve config, no training):
 python scigen/run.py data=carbon_24 model=diffusion_w_type expname=smoke --cfg job
 ```

@@ -117,10 +117,11 @@ class SampleDataset(Dataset):
                  known_species, 
                  sc_list, 
                  frac_z,
-                 c_vec_cons, 
-                 reduced_mask, 
-                 seed, 
-                 device):
+                 c_vec_cons,
+                 reduced_mask,
+                 seed,
+                 device,
+                 max_decorators=None):
         super().__init__()
         self.seed = seed
         set_seeds(self.seed)
@@ -128,16 +129,22 @@ class SampleDataset(Dataset):
         self.natm_range = sorted([int(i) for i in natm_range])
         self.natm_min, self.natm_max = self.natm_range[0], self.natm_range[-1]
         print('natm_range: ', [self.natm_min, self.natm_max])
-        self.total_num = total_num 
+        self.total_num = total_num
         self.bond_sigma_per_mu = bond_sigma_per_mu
         self.use_min_bond_len = use_min_bond_len
-        self.known_species = known_species   
-        self.sc_options = sc_list   
-        self.sc_list = random.choices(self.sc_options, k=self.total_num)  
+        self.known_species = known_species
+        self.sc_options = sc_list
+        self.sc_list = random.choices(self.sc_options, k=self.total_num)
         self.frac_z = frac_z
         self.c_vec_cons = c_vec_cons
         self.reduced_mask = reduced_mask
         self.device = device
+        # Template/skeleton-dominated mode: when set, num_atom = num_known + a small
+        # random number of decorator atoms (0..max_decorators), bypassing the dataset
+        # atom-count distribution. Required to pin whole real templates (num_known can
+        # exceed the dataset's ~20-atom support, which would otherwise zero the
+        # distribution and crash). None -> legacy distribution sampling.
+        self.max_decorators = max_decorators
         self.num_atom_distribution()
         self.process()
         self.generate_dataset()   
@@ -216,13 +223,21 @@ class SampleDataset(Dataset):
                               device=self.device,
                               **extra_kwargs)
             num_known = sc_material.num_known
-            type_distribution = self.distributions_dict[sc].copy()
-            type_distribution[:num_known+1] = [0] * (num_known + 1)
-            type_distribution[:self.natm_min] = [0] * self.natm_min
-            sum_p = sum(type_distribution)
-            assert sum_p > 0.0, f"sum_p is {sum_p}, type_distribution: {type_distribution}"
-            type_distribution_norm = [p / sum_p for p in type_distribution] 
-            num_atom = np.random.choice(len(type_distribution_norm), 1, p = type_distribution_norm)[0]
+            if self.max_decorators is not None:
+                # Template/skeleton-dominated: pin the whole known structure and add
+                # only a few model-placed decorator atoms. Bypasses the dataset
+                # atom-count distribution (which has no mass above ~20 atoms and would
+                # zero out for large pinned templates such as real Alexandria tubes).
+                num_atom = int(num_known) + random.randint(0, int(self.max_decorators))
+                num_atom = max(num_atom, 1)
+            else:
+                type_distribution = self.distributions_dict[sc].copy()
+                type_distribution[:num_known+1] = [0] * (num_known + 1)
+                type_distribution[:self.natm_min] = [0] * self.natm_min
+                sum_p = sum(type_distribution)
+                assert sum_p > 0.0, f"sum_p is {sum_p}, type_distribution: {type_distribution}"
+                type_distribution_norm = [p / sum_p for p in type_distribution]
+                num_atom = np.random.choice(len(type_distribution_norm), 1, p = type_distribution_norm)[0]
             sc_material.num_atom = num_atom
             sc_material.frac_coords_all()
             sc_material.atm_types_all()

@@ -81,6 +81,10 @@ mask_l_zonly = torch.tensor([[[0, 0, 0],
                             [0, 0, 0], 
                             [1, 1, 1]]])
 mask_l_zeros = torch.zeros(3, 3, dtype=torch.int)
+# Pin the ENTIRE cell (a, b AND the c tube axis). Kept in the (1, 3, 3) shape
+# convention of the other 3D masks so batching/broadcasting in sample_scigen works
+# (mask_l_full above is (3, 3) and would trip the reduced-mask code path).
+mask_l_allfixed = torch.ones(1, 3, 3, dtype=torch.int)
 
 def cart2frac(cart_coords, lattice_matrix): 
     """
@@ -459,8 +463,11 @@ class SC_DBTemplate(SC_Base):
         self.a_len, self.b_len, self.c_len = a, b, self.cell[2].norm().item()
 
     def get_mask_l(self):
-        # Fix the transverse vacuum box (a, b); keep the tube axis c free-length.
-        return mask_l_cvert
+        # Pin the WHOLE real cell (a, b AND the c tube axis). The template is a real
+        # DFT structure, so its cell is the ground truth; leaving c free lets a
+        # bulk-trained model inflate the tube's period. Fixing all of it keeps the
+        # generated cell template-faithful (guards the c-axis).
+        return mask_l_allfixed
 
     def atm_types_all(self):
         # Pin each known atom to its real species; fill decorators randomly.

@@ -21,8 +21,10 @@ sc_list = ['tri', 'hon', 'kag', 'sqr', 'elt', 'sns', 'tsq', 'srt', 'snh', 'trh',
 **know that** these are the old 2D-lattice motif names and don't match the nanotube constraints. This batch-screening driver was inherited and not updated. For screening, prefer calling `script/eval_screen.py --label <label>` directly on your generation output (which is constraint-agnostic — it screens whatever structures are in the `.pt`). → [components/gnn-screening.md](components/gnn-screening.md).
 
 ## 3. Sibling notebooks assume a `NTGEN-edit` path
-**If you see** notebooks in `../comp_models/NTGEN_generation/` (e.g. `05_ctgen_generation.ipynb`) referencing `../NTGEN-edit`, `models/NTGEN-edit`, or cloning into such a folder,
-**know that** this codebase was renamed to `NTGENS/` and moved to the repo root. Those relative paths are stale. When running a notebook, point it at the current `NTGENS/` location. Also note `RETRAIN_CARBON.md` refers to `../CTGEN_generation/…`, another old name for the notebook folder now called `NTGEN_generation`.
+**If you see** a notebook in `../comp_models/NTGEN_generation/` (e.g. `05_ctgen_generation.ipynb`, line ~315: `cd models/NTGEN-edit`) referencing `../NTGEN-edit`, `models/NTGEN-edit`, or cloning into such a folder,
+**know that** this codebase was renamed to `NTGENS/` and moved to the repo root. Those relative paths are stale. When running such a notebook, point it at the current `NTGENS/` location. Also note `RETRAIN_CARBON.md` refers to `../CTGEN_generation/…`, another old name for the notebook folder now called `NTGEN_generation`.
+
+> **Fixed in `ntgen_generation.ipynb`** (updated alongside this doc): its `PROJECT_DIR`/`NOTEBOOK_DIR` now point at `NTGENS/` and `comp_models/NTGEN_generation/`. `05_ctgen_generation.ipynb` still has the one stale `cd models/NTGEN-edit` reference above — fix it the same way if you touch that notebook.
 
 ## 4. `NTGENS/` is untracked (git sees the old layout)
 **If you see** `git status` showing `NTGENS/` as untracked (`??`) and many `models/NTGEN-edit/...` paths as deleted (`D`),
