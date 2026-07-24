@@ -1,0 +1,81 @@
+# Data Flow
+
+> **Audience:** both. **Purpose:** trace one structure end-to-end, naming the concrete artifact handed between each stage.
+> ⬅ Back to [docs hub](../README.md)
+
+## The pipeline at a glance
+
+```
+alexandria_1d_nanotubes.pkl                         (raw ASE structures)
+        │  build_templates.py  (run once)
+        ▼
+nanotube_templates.npz                              (CSR arrays, mmap-friendly)
+        │  _NanotubeTemplateDB.sample()   [only for sc='alx']
+        ▼
+SC_* object  ── frac_known, atom_numbers_known, cell, num_known
+        │  SampleDataset.process() + .generate_dataset()
+        ▼
+PyG `Data`  ── frac_coords_known, lattice_known, atom_types_known,
+               mask_x, mask_l, mask_t, num_atoms, num_known
+        │  model.sample_scigen(batch)   [constrained reverse diffusion]
+        ▼
+eval_gen_<label>.pt   ── frac_coords, atom_types, lengths, angles,
+                          num_atoms, num_known, (+ trajectory if saved)
+        │
+        ├── save_cif.py        → .cif files (+ zip)
+        ├── eval_screen.py     → screened .cif (via gnn_eval classifiers)
+        ├── traj_movie.py      → .gif of the diffusion trajectory
+        └── compute_metrics.py → validity / novelty / coverage metrics
+```
+
+## Stage by stage
+
+### 1. Raw data → template cache (one-time, `alx` only)
+`data/alx_1D/alexandria_1d_nanotubes.pkl` (~7002 ASE `Atoms`, multi-element, multi-element compounds) is compressed by [`build_templates.py`](../../data/alx_1D/build_templates.py) into `nanotube_templates.npz`: CSR-style flat arrays (`numbers`, `frac_coords`, `cells`, `splits`, `natoms`) for every structure with ≤ `MAX_NATM` (=64) atoms and a non-degenerate cell. No ASE needed at runtime. → [components/nanotube-template-db.md](../components/nanotube-template-db.md).
+
+### 2. Template → known skeleton (`SC_*` object)
+[`SampleDataset.process()`](../../script/gen_utils.py) picks a constraint type from `sc_list` for each sample and instantiates the matching class from `sc_dict`:
+- `alx`: calls `nanotube_template_from_db(natm_min, natm_max)` → a real `{frac_known, atom_numbers_known, cell}`, fed to `SC_DBTemplate`. If nothing fits the atom-count range, it **falls back to the parametric `SC_Nanotube`** (`ntb`).
+- `ntb` / `cnt`: synthesize a ring / rolled-graphene wall from parameters.
+- `van`: a single dummy atom, no constraint.
+
+Each `SC_*` object exposes `frac_known`, `num_known`, `cell`, and — after `frac_coords_all()` / `atm_types_all()` — the full `frac_coords`, `atom_types`, and the masks `mask_x`, `mask_t`, `mask_l`. → [components/structural-constraints.md](../components/structural-constraints.md).
+
+**The number of atoms** (`num_atom`) is sampled from an empirical per-dataset / per-constraint distribution (`sc_natm.natm_dist`), truncated so `num_known < num_atom ≤ natm_max`. The `num_atom - num_known` extra atoms are the "unknown" atoms the model will generate.
+
+### 3. Skeleton → conditioning batch (PyG `Data`)
+[`SampleDataset.generate_dataset()`](../../script/gen_utils.py) wraps each sample into a `torch_geometric.data.Data` carrying the *known* quantities plus the three masks. The masks are the heart of the constraint:
+
+| Mask | Shape | Meaning: 1 = pinned/known, 0 = free/generated |
+|---|---|---|
+| `mask_x` | `(N, 3)` | which fractional coordinates are fixed |
+| `mask_t` | `(N,)` | which atom types are fixed |
+| `mask_l` | `(3, 3)` | which lattice-matrix entries are fixed |
+
+> **Carbon special case:** when `dataset == 'carbon_24'`, `generate_dataset()` sets `data.atom_types = [6]*num_atom`, flattening all species to carbon. Correct for CNTs, wrong for multi-element `alx` templates — see [known-discrepancies.md](../known-discrepancies.md) and [usage/extending.md](../usage/extending.md).
+
+### 4. Batch → structures (constrained reverse diffusion)
+[`generation.py`](../../script/generation.py) loads the trained model, monkey-patches `model.sample_scigen`, and iterates the `SampleDataset` loader. For each batch, `sample_scigen` runs reverse diffusion where — at **every** timestep — the known quantities are re-imposed via the masks:
+
+```
+x_t = mask_x * x_0_known + (1 - mask_x) * x_unknown      # coords
+l_t = mask_l * l_0_known + (1 - mask_l) * l_unknown      # lattice
+t_t = mask_t * t_0_known + (1 - mask_t) * t_unknown      # types
+```
+
+This is the **inpainting** protocol: the known skeleton is never allowed to drift; only the unknown atoms are denoised. → [components/diffusion-model.md](../components/diffusion-model.md), [technical-foundations.md](../technical-foundations.md).
+
+### 5. Structures → saved bundle
+`generation.py` concatenates outputs, converts lattice matrices to `(lengths, angles)`, and `torch.save`s a dict to `<model_path>/eval_gen_<label>.pt`. Key fields: `frac_coords`, `atom_types`, `lengths`, `angles`, `num_atoms`, `num_known`, and (if `--save_traj`) the full per-timestep trajectory tensors.
+
+### 6. Bundle → deliverables
+The `.pt` bundle is the hand-off point for all downstream tools:
+- `save_cif.py` → CIF files + a zip.
+- `eval_screen.py` → filters via SMACT validity, occupancy ratio, then GNN classifiers → surviving CIFs. → [components/gnn-screening.md](../components/gnn-screening.md).
+- `traj_movie.py` → GIF of the trajectory (needs `--save_traj` at generation time).
+- `compute_metrics.py` → benchmark metrics (validity, novelty, uniqueness, coverage).
+
+## Next
+
+- The masks and sampler in detail → [components/diffusion-model.md](../components/diffusion-model.md)
+- Run the pipeline yourself → [usage/workflows.md](../usage/workflows.md)
