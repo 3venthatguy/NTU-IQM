@@ -111,6 +111,57 @@ def apply_radial_pull(cart_xyz, r_max, centroid, a_hat, e1, e2, strength):
     return apply_radial_band(cart_xyz, r_lo, r_max, centroid, a_hat, e1, e2, strength)
 
 
+def apply_density_force(cart_xyz, force_table, grid_lo, grid_dr, centroid, a_hat,
+                        e1, e2, strength, r_lo=None, r_hi=None):
+    """Log-density gradient guidance on the transverse radius (on device; v2).
+
+    Steps each atom's radius up d/dr log rho(r), tabulated per atom in force_table
+    (built at dataset time by sc_utils.estimate_radial_density_force). This nudges
+    atoms toward the modes of the template's empirical radial distribution (the
+    wall/shell), so they concentrate into a thin wall instead of filling the band.
+    Purely radial: axial coordinate and angle are unchanged. Layered on top of the
+    hard band (apply_radial_band); r_lo/r_hi (if given) clamp the result so guidance
+    can never push an atom out of the confinement band.
+
+    cart_xyz: (M, 3) Cartesian. force_table: (M, G) per-atom tabulated force. grid_lo
+    /grid_dr: (M,) or scalar grid origin/spacing (r = grid_lo + i*grid_dr). frame
+    (centroid/a_hat/e1/e2): (M, 3). strength: (M,) or scalar (= density_strength *
+    psi * gate); 0 -> no-op. Returns new (M, 3) Cartesian coords."""
+    z = (cart_xyz * a_hat).sum(-1, keepdim=True)          # (M, 1) axial
+    perp = cart_xyz - z * a_hat
+    rel = perp - centroid
+    u = (rel * e1).sum(-1)                                 # (M,)
+    v = (rel * e2).sum(-1)
+    r = torch.sqrt(u * u + v * v).clamp_min(1e-8)
+
+    # Linear interpolation of the per-atom force table at radius r.
+    G = force_table.shape[-1]
+    if not torch.is_tensor(grid_lo):
+        grid_lo = torch.as_tensor(grid_lo, dtype=r.dtype, device=r.device)
+    if not torch.is_tensor(grid_dr):
+        grid_dr = torch.as_tensor(grid_dr, dtype=r.dtype, device=r.device)
+    pos = (r - grid_lo) / grid_dr.clamp_min(1e-8)         # (M,) fractional bin
+    pos = pos.clamp(0, G - 1)
+    i0 = pos.floor().long()
+    i1 = (i0 + 1).clamp(max=G - 1)
+    w = (pos - i0.to(pos.dtype)).unsqueeze(-1)            # (M, 1)
+    f0 = torch.gather(force_table, 1, i0.unsqueeze(-1))   # (M, 1)
+    f1 = torch.gather(force_table, 1, i1.unsqueeze(-1))
+    g = ((1 - w) * f0 + w * f1).squeeze(-1)              # (M,) interpolated force
+
+    if not torch.is_tensor(strength):
+        strength = torch.full_like(r, float(strength))
+    r_new = r + strength * g
+    if r_lo is not None and r_hi is not None:
+        r_new = torch.max(torch.min(r_new, r_hi), r_lo)   # stay inside the band
+    r_new = r_new.clamp_min(0.0)
+    scale = r_new / r                                     # (M,)
+    u_new = (u * scale).unsqueeze(-1)
+    v_new = (v * scale).unsqueeze(-1)
+    perp_new = centroid + u_new * e1 + v_new * e2
+    return perp_new + z * a_hat
+
+
 def p_wrapped_normal(x, sigma, N=10, T=1.0):
     p_ = 0
     for i in range(-N, N + 1):

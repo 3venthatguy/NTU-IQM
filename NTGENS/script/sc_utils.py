@@ -169,6 +169,73 @@ def estimate_template_bounds(frac_known, cell, r_percentile=95.0,
     return {'axis': int(axis), 'r_max': r_max, 'r_min': r_min, 'centroid': ctr,
             'a_hat': a_hat, 'e1': e1, 'e2': e2}
 
+
+def estimate_radial_density_force(frac_known, cell, grid_size=96,
+                                  bandwidth_scale=1.0, force_clip=None,
+                                  r_grid_max=None):
+    """Per-template radial log-density guidance force (numpy, build time; v2).
+
+    Builds the empirical marginal distribution rho(r) of the template's atom radii
+    (a Gaussian KDE) and tabulates the guidance force f(r) = d/dr log rho(r) on a
+    uniform grid. At sample time the sampler interpolates f at each generated atom's
+    radius and steps the radius up the gradient, so atoms concentrate onto the real
+    wall position(s) (the modes of rho) instead of filling the whole band. A
+    bimodal rho (double-wall) yields two attractors automatically.
+
+    We KDE the RAW radii (not the Jacobian-corrected density): the goal is to match
+    the template's radial *distribution* of atoms, whose modes sit at the wall(s).
+    The KDE bandwidth is the empirical wall thickness (Silverman's rule scaled by
+    bandwidth_scale) -> data-driven, per template; <1 sharpens (thinner wall).
+
+    frac_known: (N, 3) fractional coords. cell: (3, 3) row-vector lattice. Returns
+    {grid_lo, grid_dr, force (grid_size,), bandwidth}. A degenerate/tiny template
+    (or one with no radial spread) returns an all-zero force -> the guidance is a
+    no-op and the v1 band alone governs that graph."""
+    frac = np.asarray(frac_known, dtype=float) % 1.0
+    cell = np.asarray(cell, dtype=float)
+    cart = frac @ cell
+    axis = detect_tube_axis(frac)
+    r, theta, z, ctr, a_hat, e1, e2 = cylindrical_frame(cart, cell, axis)
+
+    grid_lo = 0.0
+    if r_grid_max is None:
+        r_grid_max = float(r.max() * 1.2) if r.size else 1.0
+    r_grid_max = max(r_grid_max, 1e-3)
+    grid_dr = (r_grid_max - grid_lo) / max(grid_size - 1, 1)
+    zero = {'grid_lo': grid_lo, 'grid_dr': grid_dr,
+            'force': np.zeros(grid_size, dtype=float), 'bandwidth': 0.0}
+
+    std = float(np.std(r)) if r.size else 0.0
+    if r.size < 3 or std < 1e-6:
+        return zero                                    # nothing to shape -> no-op
+    # Silverman bandwidth = empirical wall thickness (scaled).
+    h = 1.06 * std * (r.size ** (-1.0 / 5.0)) * float(bandwidth_scale)
+    h = max(h, 1e-3)
+
+    grid = grid_lo + grid_dr * np.arange(grid_size)    # (G,)
+    # Gaussian KDE: rho(g) = mean_i N(g; r_i, h). (G, N) broadcast, small N.
+    d = (grid[:, None] - r[None, :]) / h
+    rho = np.exp(-0.5 * d * d).sum(1) / (r.size * h * math.sqrt(2 * Pi))
+    log_rho = np.log(rho + 1e-12)
+    force = np.gradient(log_rho, grid_dr)              # d/dr log rho, (G,)
+    if force_clip is None:
+        force_clip = 5.0 / h                           # ~a few wall-widths per unit
+    force = np.clip(force, -force_clip, force_clip)
+
+    # Tail robustness: far from every template radius rho underflows to the eps
+    # floor, so log rho is flat and the KDE force vanishes -> an atom stranded in
+    # the tail would get no guidance. Blend in a gentle constant pull toward the
+    # density-weighted mean radius, weighted by how "in-support" each grid point is
+    # (w = rho/rho.max()): in-support points keep the precise KDE force, tail points
+    # drift back toward the wall. In the real pipeline the v1 band already
+    # pre-confines atoms near the wall, so this only matters for wide bands.
+    w = rho / (rho.max() + 1e-30)                      # (G,) in [0, 1]
+    r_bar = float((grid * rho).sum() / (rho.sum() + 1e-30))
+    tail_force = np.sign(r_bar - grid) * (0.3 * force_clip)
+    force = w * force + (1.0 - w) * tail_force
+    return {'grid_lo': grid_lo, 'grid_dr': grid_dr,
+            'force': force.astype(float), 'bandwidth': h}
+
 # The on-device torch radial pull used inside the sampler lives in
 # scigen.pl_modules.diff_utils.apply_radial_pull (kept there to avoid a circular
 # import, since sc_utils imports from that module).

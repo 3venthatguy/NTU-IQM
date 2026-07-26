@@ -22,7 +22,7 @@ from scigen.common.data_utils import (
     EPSILON, cart_to_frac_coords, mard, lengths_angles_to_volume, lattice_params_to_matrix_torch,
     frac_to_cart_coords, min_distance_sqr_pbc)
 
-from scigen.pl_modules.diff_utils import d_log_p_wrapped_normal, pinning_strength, apply_radial_pull, apply_radial_band
+from scigen.pl_modules.diff_utils import d_log_p_wrapped_normal, pinning_strength, apply_radial_pull, apply_radial_band, apply_density_force
 
 
 MAX_ATOMIC_NUM=100
@@ -241,13 +241,17 @@ def sample_scigen(self, batch, diff_ratio = 1.0, step_lr = 1e-5):
     # block reproduces the original binary-pinning sampler exactly.
     pin_cfg = getattr(self, 'pin_cfg', None)
     cyl_cfg = getattr(self, 'cyl_cfg', None)
+    dens_cfg = getattr(self, 'dens_cfg', None)
     T_total = self.beta_scheduler.timesteps
 
     cyl_on = bool(cyl_cfg and cyl_cfg.get('enabled', False)) and hasattr(batch, 'is_alx')
-    if cyl_on:
+    # v2: radial log-density guidance (concentrate atoms onto the wall within the band).
+    dens_on = bool(dens_cfg and dens_cfg.get('enabled', False)) and hasattr(batch, 'dens_force')
+    geom_on = cyl_on or dens_on
+    if geom_on:
         node_batch = batch.batch
         pull_gate = batch.is_alx[node_batch]                      # (N,) 1 for tube graphs
-        r_hi_atom = batch.r_max[node_batch] * (1.0 + float(cyl_cfg.get('margin', 0.0)))
+        r_hi_atom = batch.r_max[node_batch] * (1.0 + float((cyl_cfg or {}).get('margin', 0.0)))
         # Inner band edge: 0 for the 'alx' envelope (one-sided, decorators only),
         # r_min for the 'shl' shell (two-sided, confines every atom into the wall).
         # Older batches without r_min fall back to 0 -> the original envelope.
@@ -257,20 +261,32 @@ def sample_scigen(self, batch, diff_ratio = 1.0, step_lr = 1e-5):
         a_hat_atom = batch.tube_a_hat[node_batch]
         e1_atom = batch.tube_e1[node_batch]
         e2_atom = batch.tube_e2[node_batch]
-        max_strength = float(cyl_cfg.get('max_strength', 1.0))
+        max_strength = float((cyl_cfg or {}).get('max_strength', 1.0))
+    if dens_on:
+        dens_force_atom = batch.dens_force[node_batch]            # (N, G)
+        dens_grid_lo_atom = batch.dens_grid_lo[node_batch]        # (N,)
+        dens_grid_dr_atom = batch.dens_grid_dr[node_batch]
+        density_strength = float(dens_cfg.get('density_strength', 0.05))
 
     def radial_envelope(x_frac, lat, psi):
-        """Confine tube-graph atoms into the transverse band [r_lo, r_hi]; the pull
-        strength scales with the pinning strength psi so early (exploratory) steps
-        are free and late steps enforce the shell. For 'alx' r_lo=0 (one-sided
-        ceiling on decorators); for 'shl' r_lo=r_min so all atoms collapse onto the
-        wall band. No-op unless cyl_on."""
-        if not cyl_on:
+        """Shape tube-graph atoms transversely. (1) Hard band [r_lo, r_hi] confines
+        them (v1); (2) log-density guidance nudges them up d/dr log rho(r) toward the
+        template's wall (v2), concentrating a filled disk into a thin wall. Both
+        scale with psi so early (exploratory) steps are free and late steps enforce
+        the shape. No-op unless a mode is on."""
+        if not geom_on:
             return x_frac
         cart = frac_to_cart_coords(x_frac, None, None, batch.num_atoms, lattices=lat)
-        strength = (max_strength * psi) * pull_gate              # (N,)
-        cart = apply_radial_band(cart, r_lo_atom, r_hi_atom, centroid_atom,
-                                 a_hat_atom, e1_atom, e2_atom, strength)
+        if cyl_on:
+            strength = (max_strength * psi) * pull_gate          # (N,)
+            cart = apply_radial_band(cart, r_lo_atom, r_hi_atom, centroid_atom,
+                                     a_hat_atom, e1_atom, e2_atom, strength)
+        if dens_on:
+            d_strength = (density_strength * psi) * pull_gate    # (N,)
+            cart = apply_density_force(cart, dens_force_atom, dens_grid_lo_atom,
+                                       dens_grid_dr_atom, centroid_atom, a_hat_atom,
+                                       e1_atom, e2_atom, d_strength,
+                                       r_lo=r_lo_atom, r_hi=r_hi_atom)
         inv_nodes = torch.repeat_interleave(torch.linalg.pinv(lat), batch.num_atoms, dim=0)
         return torch.einsum('ni,nij->nj', cart, inv_nodes) % 1.0
 

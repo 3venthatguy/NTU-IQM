@@ -143,7 +143,9 @@ class SampleDataset(Dataset):
                  device,
                  max_decorators=None,
                  template_source=None,
-                 r_lo_percentile=5.0):
+                 r_lo_percentile=5.0,
+                 bandwidth_scale=1.0,
+                 density_grid_size=96):
         super().__init__()
         self.seed = seed
         set_seeds(self.seed)
@@ -173,6 +175,10 @@ class SampleDataset(Dataset):
         # Inner band-edge percentile for the sc='shl' shell (r_min); ignored by
         # 'alx' (its envelope stays one-sided).
         self.r_lo_percentile = r_lo_percentile
+        # v2 radial density guidance: KDE bandwidth multiplier (empirical wall
+        # thickness; <1 sharpens) and the per-template force-table grid resolution.
+        self.bandwidth_scale = bandwidth_scale
+        self.density_grid_size = density_grid_size
         self.num_atom_distribution()
         self.process()
         self.generate_dataset()   
@@ -228,6 +234,9 @@ class SampleDataset(Dataset):
         # Per-template cylindrical bounds for the radial envelope (sc='alx' real
         # templates only); None disables the envelope for that sample.
         self.tube_bounds_list = []
+        # v2: per-template radial log-density force table for density guidance;
+        # None disables guidance for that sample.
+        self.tube_density_list = []
         # self.get_num_atoms()
         for i, (sc, type_known, bond_len, frac_z_known) in enumerate(zip(self.sc_list, self.type_known_list, self.bond_len_list, self.frac_z_known_list)):
             sc_obj = sc_dict[sc]
@@ -303,10 +312,18 @@ class SampleDataset(Dataset):
                 else:
                     frac_np = sc_material.frac_known.detach().cpu().numpy()
                 cell_np = sc_material.cell.detach().cpu().numpy()
-                self.tube_bounds_list.append(estimate_template_bounds(
-                    frac_np, cell_np, r_lo_percentile=self.r_lo_percentile))
+                bounds = estimate_template_bounds(
+                    frac_np, cell_np, r_lo_percentile=self.r_lo_percentile)
+                self.tube_bounds_list.append(bounds)
+                # v2: density force table over [0, r_max*1.2], measured from the
+                # same template atoms so it is self-consistent with the band.
+                self.tube_density_list.append(estimate_radial_density_force(
+                    frac_np, cell_np, grid_size=self.density_grid_size,
+                    bandwidth_scale=self.bandwidth_scale,
+                    r_grid_max=bounds['r_max'] * 1.2))
             else:
                 self.tube_bounds_list.append(None)
+                self.tube_density_list.append(None)
 
             self.num_known_list.append(num_known)
             self.num_atom_list.append(num_atom)
@@ -347,6 +364,18 @@ class SampleDataset(Dataset):
                 centroid_ = torch.zeros(3); a_hat_ = torch.zeros(3)
                 e1_ = torch.zeros(3); e2_ = torch.zeros(3)
 
+            # v2 density-guidance force table (per graph). Zero force -> no-op when
+            # no template was used or guidance is disabled downstream.
+            dens = self.tube_density_list[index]
+            G = self.density_grid_size
+            if dens is not None:
+                dens_grid_lo_ = float(dens['grid_lo'])
+                dens_grid_dr_ = float(dens['grid_dr'])
+                dens_force_ = torch.as_tensor(dens['force'], dtype=torch.float)
+            else:
+                dens_grid_lo_, dens_grid_dr_ = 0.0, 1.0
+                dens_force_ = torch.zeros(G, dtype=torch.float)
+
             data = Data(
                 num_atoms=torch.LongTensor([num_atom]),
                 num_nodes=num_atom,
@@ -365,6 +394,9 @@ class SampleDataset(Dataset):
                 tube_a_hat=a_hat_.unsqueeze(0),
                 tube_e1=e1_.unsqueeze(0),
                 tube_e2=e2_.unsqueeze(0),
+                dens_grid_lo=torch.tensor([dens_grid_lo_], dtype=torch.float),
+                dens_grid_dr=torch.tensor([dens_grid_dr_], dtype=torch.float),
+                dens_force=dens_force_.unsqueeze(0),
             )
             if self.is_carbon:
                 data.atom_types = torch.LongTensor([6] * num_atom)

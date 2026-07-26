@@ -89,8 +89,16 @@ def main(args):
         'r_lo_percentile': args.cyl_r_lo_pct,
         'max_strength': args.cyl_strength,
     }
+    # v2 radial density guidance (concentrate atoms onto the wall within the band).
+    model.dens_cfg = {
+        'enabled': args.density_guidance,
+        'density_strength': args.density_strength,
+        'bandwidth_scale': args.bandwidth_scale,
+        'grid_size': args.density_grid_size,
+    }
     print('pin_cfg:', model.pin_cfg)
     print('cyl_cfg:', model.cyl_cfg)
+    print('dens_cfg:', model.dens_cfg)
     print('Evaluate the diffusion model.')
     c_vec_cons = {'scale': args.c_scale, 'vert': args.c_vert}
     # print('c_vec_cons: ', c_vec_cons)
@@ -108,7 +116,9 @@ def main(args):
                             device=device,
                             max_decorators=args.max_decorators,
                             template_source=args.template_source,
-                            r_lo_percentile=args.cyl_r_lo_pct)
+                            r_lo_percentile=args.cyl_r_lo_pct,
+                            bandwidth_scale=args.bandwidth_scale,
+                            density_grid_size=args.density_grid_size)
     test_loader = DataLoader(test_set, batch_size = args.batch_size)
     step_lr = args.step_lr if args.step_lr >= 0 else recommand_step_lr['gen'][args.dataset]
     start_time = time.time()
@@ -144,6 +154,7 @@ def main(args):
         'c_vec_cons': c_vec_cons,
         'pin_cfg': model.pin_cfg,
         'cyl_cfg': model.cyl_cfg,
+        'dens_cfg': model.dens_cfg,
         'seed': seed,
         'time': run_time,
     }
@@ -188,5 +199,11 @@ if __name__ == '__main__':
     parser.add_argument('--cyl_margin', default=0.1, type=float, help="r_hi = r_max * (1 + margin).")
     parser.add_argument('--cyl_r_lo_pct', default=5.0, type=float, help="Inner band-edge percentile for sc='shl' shell confinement.")
     parser.add_argument('--cyl_strength', default=1.0, type=float, help="Peak radial pull (scaled by psi(t)).")
+    # v2 radial density guidance: concentrate atoms onto the wall within the band.
+    parser.add_argument('--density_guidance', type=lambda x: x.lower() == 'true', default=False,
+                        help="Nudge atoms up d/dr log rho(r) toward the template's wall (sc='shl').")
+    parser.add_argument('--density_strength', default=0.05, type=float, help="Density-guidance radial step scale (scaled by psi(t)).")
+    parser.add_argument('--bandwidth_scale', default=1.0, type=float, help="KDE bandwidth multiplier = wall thickness (<1 sharpens).")
+    parser.add_argument('--density_grid_size', default=96, type=int, help="Per-template density force-table resolution.")
     args = parser.parse_args()
     main(args)

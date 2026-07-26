@@ -30,6 +30,15 @@ cylindrical_masking:
   # Band semantics: sc='alx' uses a one-sided ceiling (r_lo=0, pulls only decorators
   # that stray past r_hi inward); sc='shl' uses the two-sided band [r_min, r_max*(1+margin)]
   # to confine EVERY generated atom onto the wall shell (no atoms pinned).
+radial_density_guidance:  # v2: concentrate atoms onto the wall WITHIN the band
+  enabled: false          # true -> nudge each atom up d/dr log rho(r) toward the wall
+  density_strength: 0.05  # radial step scale for the guidance force (scaled by psi(t))
+  bandwidth_scale: 1.0    # KDE bandwidth multiplier = empirical wall thickness (<1 sharpens)
+  grid_size: 96           # force-table resolution per template
+  force_clip: null        # per-step radial-force cap (null -> auto = 5/bandwidth)
+  # Runtime reads model.dens_cfg (see generation.py / notebook). Layered on top of
+  # the band above: the band confines to [r_lo, r_hi], the density force shapes a
+  # filled disk into a thin wall (single- or double-wall handled by rho(r)'s modes).
 
 defaults:
   - decoder: cspnet
