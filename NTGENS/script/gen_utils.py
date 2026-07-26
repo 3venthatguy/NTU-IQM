@@ -36,22 +36,37 @@ class _NanotubeTemplateDB:
         self._cells = z['cells']                        # (M, 3, 3)  float32
         self._splits = z['splits']                      # (M+1,)     int64
         self._natoms = np.asarray(z['natoms'])          # (M,)       int32
+        # Per-structure provenance (0=synthetic, 1=real). Optional: older caches
+        # (built before the tagged-DB change) have no `source` array -> treat every
+        # template as one untagged pool so source_filter=None keeps working.
+        self._source = np.asarray(z['source']) if 'source' in z.files else None
+        self._source_codes = {'synthetic': 0, 'real': 1}
         # Bucket structure indices by atom count for cheap range queries.
         self._by_natm = {}
         for i, n in enumerate(self._natoms.tolist()):
             self._by_natm.setdefault(n, []).append(i)
         self.max_natm = int(z['max_natm'])
         self.ok = True
+        src_note = ''
+        if self._source is not None:
+            n_real = int((self._source == 1).sum())
+            src_note = f', source: {n_real} real / {len(self._source) - n_real} synthetic'
         print(f'Loaded {len(self._natoms)} nanotube templates '
-              f'(natoms {int(self._natoms.min())}-{int(self._natoms.max())})')
+              f'(natoms {int(self._natoms.min())}-{int(self._natoms.max())}{src_note})')
 
-    def sample(self, natm_min, natm_max):
+    def sample(self, natm_min, natm_max, source_filter=None):
         """Return one template with natm_min <= N <= natm_max, or None if none fit.
-        The caller keeps room for decoration by passing natm_max = its ceiling - 1."""
+        The caller keeps room for decoration by passing natm_max = its ceiling - 1.
+
+        source_filter: None -> any source; 'real'/'synthetic' (or the int code) ->
+        restrict the pool to that provenance. Ignored when the cache is untagged."""
         if not self.ok:
             return None
         pool = [i for n in range(int(natm_min), int(natm_max) + 1)
                 for i in self._by_natm.get(n, [])]
+        if source_filter is not None and self._source is not None:
+            code = self._source_codes.get(source_filter, source_filter)
+            pool = [i for i in pool if int(self._source[i]) == code]
         if not pool:
             return None
         idx = random.choice(pool)
@@ -64,12 +79,17 @@ class _NanotubeTemplateDB:
 
 NANOTUBE_DB = _NanotubeTemplateDB()
 
-def nanotube_template_from_db(natm_min, natm_max):
-    """Sample a real 1D-nanotube template (sc='alx') that leaves room for >=1
-    decorating atom. Returns SC_DBTemplate kwargs, or {} to fall back to the
-    parametric SC_Nanotube ('ntb')."""
+def nanotube_template_from_db(natm_min, natm_max, source_filter=None):
+    """Sample a 1D-nanotube template (sc='alx') that leaves room for >=1 decorating
+    atom. Returns SC_DBTemplate kwargs, or {} to fall back to the parametric
+    SC_Nanotube ('ntb').
+
+    source_filter: None -> pin from any source; 'real'/'synthetic' -> restrict to
+    that provenance (e.g. 'real' to pin only DFT structures). Ignored on untagged
+    caches, so old npz files behave exactly as before."""
     # num_atom must exceed num_known (= N), so cap N at natm_max - 1.
-    tmpl = NANOTUBE_DB.sample(natm_min, max(natm_min, natm_max - 1))
+    tmpl = NANOTUBE_DB.sample(natm_min, max(natm_min, natm_max - 1),
+                              source_filter=source_filter)
     return tmpl if tmpl is not None else {}
 
 def nanotube_params_from_db(bond_len=None, element=None):
@@ -121,7 +141,9 @@ class SampleDataset(Dataset):
                  reduced_mask,
                  seed,
                  device,
-                 max_decorators=None):
+                 max_decorators=None,
+                 template_source=None,
+                 r_lo_percentile=5.0):
         super().__init__()
         self.seed = seed
         set_seeds(self.seed)
@@ -145,6 +167,12 @@ class SampleDataset(Dataset):
         # exceed the dataset's ~20-atom support, which would otherwise zero the
         # distribution and crash). None -> legacy distribution sampling.
         self.max_decorators = max_decorators
+        # Provenance filter for sc='alx' pinning: None -> any template, 'real' or
+        # 'synthetic' -> pin only that source (see nanotube_template_from_db).
+        self.template_source = template_source
+        # Inner band-edge percentile for the sc='shl' shell (r_min); ignored by
+        # 'alx' (its envelope stays one-sided).
+        self.r_lo_percentile = r_lo_percentile
         self.num_atom_distribution()
         self.process()
         self.generate_dataset()   
@@ -196,7 +224,10 @@ class SampleDataset(Dataset):
         self.frac_coords_list = []
         self.atom_types_list = []
         self.lattice_list = []
-        self.mask_x_list, self.mask_t_list, self.mask_l_list =  [], [], [] 
+        self.mask_x_list, self.mask_t_list, self.mask_l_list =  [], [], []
+        # Per-template cylindrical bounds for the radial envelope (sc='alx' real
+        # templates only); None disables the envelope for that sample.
+        self.tube_bounds_list = []
         # self.get_num_atoms()
         for i, (sc, type_known, bond_len, frac_z_known) in enumerate(zip(self.sc_list, self.type_known_list, self.bond_len_list, self.frac_z_known_list)):
             sc_obj = sc_dict[sc]
@@ -205,7 +236,17 @@ class SampleDataset(Dataset):
             if sc == 'alx':
                 # Real 1D-nanotube template pinned as the known skeleton. If no
                 # template fits natm_range, fall back to the parametric SC_Nanotube.
-                extra_kwargs = nanotube_template_from_db(self.natm_min, self.natm_max)
+                extra_kwargs = nanotube_template_from_db(
+                    self.natm_min, self.natm_max, source_filter=self.template_source)
+                if not extra_kwargs:
+                    sc_obj = sc_dict['ntb']
+            elif sc == 'shl':
+                # Real 1D-nanotube GEOMETRY only: the template's cell defines the
+                # tube frame + radial band, but NO atoms are pinned (num_known=0);
+                # the model generates every atom, confined to the shell. Same DB
+                # draw as 'alx'; empty -> fall back to the parametric SC_Nanotube.
+                extra_kwargs = nanotube_template_from_db(
+                    self.natm_min, self.natm_max, source_filter=self.template_source)
                 if not extra_kwargs:
                     sc_obj = sc_dict['ntb']
             elif sc == 'ntb':
@@ -223,7 +264,15 @@ class SampleDataset(Dataset):
                               device=self.device,
                               **extra_kwargs)
             num_known = sc_material.num_known
-            if self.max_decorators is not None:
+            shl_template = (sc == 'shl' and bool(extra_kwargs))
+            if shl_template:
+                # Geometric-shell mode: no atoms pinned (num_known=0). The target
+                # atom count is the drawn tube's real nsites, so the generated tube
+                # has a realistic wall density. Bypasses both the decorator logic and
+                # the dataset distribution.
+                num_atom = int(len(extra_kwargs['atom_numbers_known']))
+                num_atom = max(num_atom, 1)
+            elif self.max_decorators is not None:
                 # Template/skeleton-dominated: pin the whole known structure and add
                 # only a few model-placed decorator atoms. Bypasses the dataset
                 # atom-count distribution (which has no mass above ~20 atoms and would
@@ -241,6 +290,23 @@ class SampleDataset(Dataset):
             sc_material.num_atom = num_atom
             sc_material.frac_coords_all()
             sc_material.atm_types_all()
+
+            # Cylindrical bounds from a real template. 'alx' measures the band from
+            # its pinned skeleton (frac_known); 'shl' measures it from the drawn
+            # template's atoms (which are otherwise discarded, since num_known=0).
+            # Fallback 'ntb' and all other constraints get None -> the radial
+            # confinement is disabled downstream.
+            used_real_template = (sc in ('alx', 'shl') and bool(extra_kwargs))
+            if used_real_template:
+                if sc == 'shl':
+                    frac_np = np.asarray(extra_kwargs['frac_known'], dtype=float)
+                else:
+                    frac_np = sc_material.frac_known.detach().cpu().numpy()
+                cell_np = sc_material.cell.detach().cpu().numpy()
+                self.tube_bounds_list.append(estimate_template_bounds(
+                    frac_np, cell_np, r_lo_percentile=self.r_lo_percentile))
+            else:
+                self.tube_bounds_list.append(None)
 
             self.num_known_list.append(num_known)
             self.num_atom_list.append(num_atom)
@@ -260,18 +326,45 @@ class SampleDataset(Dataset):
             lattice_known_=self.lattice_list[index].unsqueeze(0)
             atom_types_known_=self.atom_types_list[index]
             mask_x_, mask_l_, mask_t_ = [a[index] for a in [self.mask_x_list, self.mask_l_list, self.mask_t_list]]
-            
+
+            # Graph-level cylindrical-envelope metadata. Stored with a leading
+            # batch dim of 1 so PyG concatenates them to (B, ...) exactly like
+            # lattice_known; the sampler expands per-atom via batch.batch. When no
+            # real template was pinned, is_alx=0 and r_max is a large sentinel so
+            # the radial pull is a no-op (r > r_max is never true).
+            bounds = self.tube_bounds_list[index]
+            if bounds is not None:
+                is_alx_, r_max_, axis_ = 1.0, float(bounds['r_max']), int(bounds['axis'])
+                # Inner band edge: 'shl' confines all atoms into [r_min, r_max];
+                # 'alx' leaves it 0 (one-sided envelope on decorators only).
+                r_min_ = float(bounds['r_min']) if self.sc_list[index] == 'shl' else 0.0
+                centroid_ = torch.as_tensor(bounds['centroid'], dtype=torch.float)
+                a_hat_ = torch.as_tensor(bounds['a_hat'], dtype=torch.float)
+                e1_ = torch.as_tensor(bounds['e1'], dtype=torch.float)
+                e2_ = torch.as_tensor(bounds['e2'], dtype=torch.float)
+            else:
+                is_alx_, r_max_, r_min_, axis_ = 0.0, 1e6, 0.0, 0
+                centroid_ = torch.zeros(3); a_hat_ = torch.zeros(3)
+                e1_ = torch.zeros(3); e2_ = torch.zeros(3)
+
             data = Data(
                 num_atoms=torch.LongTensor([num_atom]),
                 num_nodes=num_atom,
-                num_known=num_known_,    
-                frac_coords_known=frac_coords_known_,    
-                lattice_known=lattice_known_,    
-                atom_types_known=atom_types_known_,    
-                mask_x=mask_x_,    
-                mask_l=mask_l_,    
-                mask_t=mask_t_,    
-                
+                num_known=num_known_,
+                frac_coords_known=frac_coords_known_,
+                lattice_known=lattice_known_,
+                atom_types_known=atom_types_known_,
+                mask_x=mask_x_,
+                mask_l=mask_l_,
+                mask_t=mask_t_,
+                is_alx=torch.tensor([is_alx_], dtype=torch.float),
+                r_max=torch.tensor([r_max_], dtype=torch.float),
+                r_min=torch.tensor([r_min_], dtype=torch.float),
+                tube_axis=torch.tensor([axis_], dtype=torch.long),
+                tube_centroid=centroid_.unsqueeze(0),
+                tube_a_hat=a_hat_.unsqueeze(0),
+                tube_e1=e1_.unsqueeze(0),
+                tube_e2=e2_.unsqueeze(0),
             )
             if self.is_carbon:
                 data.atom_types = torch.LongTensor([6] * num_atom)

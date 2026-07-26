@@ -22,7 +22,7 @@ from scigen.common.data_utils import (
     EPSILON, cart_to_frac_coords, mard, lengths_angles_to_volume, lattice_params_to_matrix_torch,
     frac_to_cart_coords, min_distance_sqr_pbc)
 
-from scigen.pl_modules.diff_utils import d_log_p_wrapped_normal
+from scigen.pl_modules.diff_utils import d_log_p_wrapped_normal, pinning_strength, apply_radial_pull, apply_radial_band
 
 
 MAX_ATOMIC_NUM=100
@@ -234,14 +234,57 @@ def sample_scigen(self, batch, diff_ratio = 1.0, step_lr = 1e-5):
         mask_x, mask_l = mask_x.unsqueeze(-1), mask_l.unsqueeze(-1)
     mask_x_inv, mask_l_inv, mask_t_inv = 1 - mask_x, 1 - mask_l, 1 - mask_t
 
+    # --- Progressive skeleton pinning + cylindrical radial envelope -----------
+    # Both are opt-in via runtime attributes set on the model instance right after
+    # the sample_scigen monkey-patch (model.pin_cfg / model.cyl_cfg). When absent
+    # or disabled, psi(t)==1 at every step and the radial pull is a no-op, so this
+    # block reproduces the original binary-pinning sampler exactly.
+    pin_cfg = getattr(self, 'pin_cfg', None)
+    cyl_cfg = getattr(self, 'cyl_cfg', None)
+    T_total = self.beta_scheduler.timesteps
+
+    cyl_on = bool(cyl_cfg and cyl_cfg.get('enabled', False)) and hasattr(batch, 'is_alx')
+    if cyl_on:
+        node_batch = batch.batch
+        pull_gate = batch.is_alx[node_batch]                      # (N,) 1 for tube graphs
+        r_hi_atom = batch.r_max[node_batch] * (1.0 + float(cyl_cfg.get('margin', 0.0)))
+        # Inner band edge: 0 for the 'alx' envelope (one-sided, decorators only),
+        # r_min for the 'shl' shell (two-sided, confines every atom into the wall).
+        # Older batches without r_min fall back to 0 -> the original envelope.
+        r_lo_atom = (batch.r_min[node_batch] if hasattr(batch, 'r_min')
+                     else torch.zeros_like(r_hi_atom))
+        centroid_atom = batch.tube_centroid[node_batch]           # (N, 3)
+        a_hat_atom = batch.tube_a_hat[node_batch]
+        e1_atom = batch.tube_e1[node_batch]
+        e2_atom = batch.tube_e2[node_batch]
+        max_strength = float(cyl_cfg.get('max_strength', 1.0))
+
+    def radial_envelope(x_frac, lat, psi):
+        """Confine tube-graph atoms into the transverse band [r_lo, r_hi]; the pull
+        strength scales with the pinning strength psi so early (exploratory) steps
+        are free and late steps enforce the shell. For 'alx' r_lo=0 (one-sided
+        ceiling on decorators); for 'shl' r_lo=r_min so all atoms collapse onto the
+        wall band. No-op unless cyl_on."""
+        if not cyl_on:
+            return x_frac
+        cart = frac_to_cart_coords(x_frac, None, None, batch.num_atoms, lattices=lat)
+        strength = (max_strength * psi) * pull_gate              # (N,)
+        cart = apply_radial_band(cart, r_lo_atom, r_hi_atom, centroid_atom,
+                                 a_hat_atom, e1_atom, e2_atom, strength)
+        inv_nodes = torch.repeat_interleave(torch.linalg.pinv(lat), batch.num_atoms, dim=0)
+        return torch.einsum('ni,nij->nj', cart, inv_nodes) % 1.0
+
     print('num_atoms: ', batch.num_atoms)
     print('mask_x, x_T_known, x_T_unk: ', mask_x.shape, x_T_known.shape, x_T_unk.shape) 
     print('mask_l, l_T_known, l_T_unk: ', mask_l.shape, l_T_known.shape, l_T_unk.shape)
     print('mask_t, t_T_known, t_T_unk: ', mask_t.shape, t_T_known.shape, t_T_unk.shape)
 
-    x_T = mask_x * x_T_known + mask_x_inv * x_T_unk    
-    l_T = mask_l * l_T_known + mask_l_inv * l_T_unk    
-    t_T = mask_t * t_T_known + mask_t_inv * t_T_unk  
+    # At t=T the pinning strength is psi_start (~0 for a ramp), so known atoms
+    # start from noise too -> the whole batch begins in-distribution.
+    psi_T = pinning_strength(self.beta_scheduler.timesteps, T_total, pin_cfg)
+    x_T = (psi_T * mask_x) * x_T_known + (1 - psi_T * mask_x) * x_T_unk
+    l_T = (psi_T * mask_l) * l_T_known + (1 - psi_T * mask_l) * l_T_unk
+    t_T = (psi_T * mask_t) * t_T_known + (1 - psi_T * mask_t) * t_T_unk
 
         
     if self.keep_coords:
@@ -263,6 +306,12 @@ def sample_scigen(self, batch, diff_ratio = 1.0, step_lr = 1e-5):
         times = torch.full((batch_size, ), t, device = self.device)
 
         time_emb = self.time_embedding(times)
+
+        # Pinning strength at this step and the psi-scaled effective masks. psi==1
+        # (schedule disabled) recovers the original binary masks exactly.
+        psi = pinning_strength(t, T_total, pin_cfg)
+        mask_x_e, mask_l_e, mask_t_e = psi * mask_x, psi * mask_l, psi * mask_t
+        mask_x_ei, mask_l_ei, mask_t_ei = 1 - mask_x_e, 1 - mask_l_e, 1 - mask_t_e
         
         alphas = self.beta_scheduler.alphas[t]
         alphas_cumprod = self.beta_scheduler.alphas_cumprod[t]
@@ -319,9 +368,10 @@ def sample_scigen(self, batch, diff_ratio = 1.0, step_lr = 1e-5):
         l_t_minus_05_known = C0_minus_0 * l_0_known + C1_minus_0 * rand_l_known   
         t_t_minus_05_known = C0_minus_0 * t_0_known + C1_minus_0 * rand_t_known   
 
-        x_t_minus_05 = mask_x * x_t_minus_05_known + mask_x_inv * x_t_minus_05_unk  
-        l_t_minus_05 = mask_l * l_t_minus_05_known + mask_l_inv * l_t_minus_05_unk   
-        t_t_minus_05 = mask_t * t_t_minus_05_known + mask_t_inv * t_t_minus_05_unk   
+        x_t_minus_05 = mask_x_e * x_t_minus_05_known + mask_x_ei * x_t_minus_05_unk
+        l_t_minus_05 = mask_l_e * l_t_minus_05_known + mask_l_ei * l_t_minus_05_unk
+        t_t_minus_05 = mask_t_e * t_t_minus_05_known + mask_t_ei * t_t_minus_05_unk
+        x_t_minus_05 = radial_envelope(x_t_minus_05, l_t_minus_05, psi)
         
     
         # Predictor
@@ -353,9 +403,10 @@ def sample_scigen(self, batch, diff_ratio = 1.0, step_lr = 1e-5):
         l_t_minus_1_known = C0_minus_1 * l_0_known + C1_minus_1 * rand_l_known   
         t_t_minus_1_known = C0_minus_1 * t_0_known + C1_minus_1 * rand_t_known   
 
-        x_t_minus_1 = mask_x * x_t_minus_1_known + mask_x_inv * x_t_minus_1_unk  
-        l_t_minus_1 = mask_l * l_t_minus_1_known + mask_l_inv * l_t_minus_1_unk   
-        t_t_minus_1 = mask_t * t_t_minus_1_known + mask_t_inv * t_t_minus_1_unk   
+        x_t_minus_1 = mask_x_e * x_t_minus_1_known + mask_x_ei * x_t_minus_1_unk
+        l_t_minus_1 = mask_l_e * l_t_minus_1_known + mask_l_ei * l_t_minus_1_unk
+        t_t_minus_1 = mask_t_e * t_t_minus_1_known + mask_t_ei * t_t_minus_1_unk
+        x_t_minus_1 = radial_envelope(x_t_minus_1, l_t_minus_1, psi)
 
         traj[t - 1] = {
             'num_atoms' : batch.num_atoms,

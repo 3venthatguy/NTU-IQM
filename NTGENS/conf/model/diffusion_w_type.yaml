@@ -8,6 +8,29 @@ max_neighbors: 20  # maximum number of neighbors for OTF graph bulding in decode
 radius: 7.  # maximum search radius for OTF graph building in decoder
 timesteps: 1000
 
+# --- Constrained-sampling controls (sc='alx' nanotube generation) -------------
+# These document the knobs for progressive skeleton pinning and the cylindrical
+# radial envelope. NOTE: at generation time the sampler reads these off runtime
+# attributes set on the loaded model (model.pin_cfg / model.cyl_cfg in
+# script/generation.py and ntgen_generation.ipynb), because a pretrained
+# checkpoint's self.hparams are frozen at training time. The values here are the
+# documented defaults the CLI/notebook forward, and defaults for future retraining.
+progressive_skeleton_pinning:
+  enabled: false          # true -> ramp the skeleton mask via psi(t) instead of binary pinning
+  schedule: sigmoid       # 'linear' | 'sigmoid' | 'none'
+  alpha: 10.0             # sigmoid steepness
+  t_mid_frac: 0.6         # sigmoid inflection point as a fraction of T
+  psi_start: 0.0          # pinning strength at t=T (0 -> start from noise, in-distribution)
+  psi_end: 1.0            # pinning strength at t=0 (1 -> skeleton fully pinned)
+cylindrical_masking:
+  enabled: false          # true -> softly confine atoms to the tube's radial band
+  margin: 0.1             # r_hi = r_max * (1 + margin); outer headroom
+  r_lo_percentile: 5.0    # inner band edge percentile (sc='shl' shell only)
+  max_strength: 1.0       # peak radial pull (scaled by psi(t) each step)
+  # Band semantics: sc='alx' uses a one-sided ceiling (r_lo=0, pulls only decorators
+  # that stray past r_hi inward); sc='shl' uses the two-sided band [r_min, r_max*(1+margin)]
+  # to confine EVERY generated atom onto the wall shell (no atoms pinned).
+
 defaults:
   - decoder: cspnet
   - beta_scheduler: cosine

@@ -103,7 +103,78 @@ def cart2frac(cart_coords, lattice_matrix):
     fractional_coords = torch.einsum('ij,ki->kj', lattice_inv, cart_coords)
     return fractional_coords
 
-def reflect_across_line(coords, line):  
+# --- Cylindrical geometry for the 1D-nanotube radial envelope -----------------
+# These mirror the conventions in comp_models/Analysis/nanotube_rtheta_forensics.ipynb
+# (tube-axis detection by occupied fraction; Gram-Schmidt transverse frame) so the
+# per-template r_max used to constrain decorators matches that analysis. The numpy
+# helpers run once per template at dataset-build time; the torch helper runs on
+# device inside the sampler.
+
+def detect_tube_axis(frac_coords):
+    """Lattice direction the atoms fill most (smallest circular vacuum gap in the
+    wrapped fractional coords). Robust to cell orientation; matches the forensics
+    notebook. `frac_coords`: (N, 3) numpy array. Returns axis index in {0,1,2}."""
+    frac = np.asarray(frac_coords, dtype=float)
+    occ = []
+    for k in range(3):
+        f = np.sort(frac[:, k] % 1.0)
+        if len(f) < 2:
+            occ.append(0.0); continue
+        gaps = np.diff(np.concatenate([f, [f[0] + 1.0]]))   # wrap-around gaps
+        occ.append(1.0 - gaps.max())
+    return int(np.argmax(occ))
+
+def cylindrical_frame(cart, cell, axis):
+    """Transverse cylindrical frame about the tube axis (numpy).
+
+    cart: (N, 3) Cartesian coords (A). cell: (3, 3) row-vector lattice. axis: the
+    tube-axis lattice index. Returns (r, theta, z, centroid, a_hat, e1, e2) where
+    r/theta/z are (N,), and centroid/a_hat/e1/e2 are (3,) vectors defining the
+    frame: a_hat = tube axis, e1/e2 = orthonormal transverse basis (Gram-Schmidt,
+    so non-orthogonal cells are handled), centroid = cross-section centroid."""
+    cart = np.asarray(cart, dtype=float)
+    cell = np.asarray(cell, dtype=float)
+    a_hat = cell[axis] / np.linalg.norm(cell[axis])
+    z = cart @ a_hat                                   # axial coordinate
+    perp = cart - np.outer(z, a_hat)                   # transverse component
+    other = [k for k in range(3) if k != axis]
+    e1 = cell[other[0]] - (cell[other[0]] @ a_hat) * a_hat
+    e1 = e1 / np.linalg.norm(e1)
+    e2 = np.cross(a_hat, e1)                            # completes the frame
+    ctr = perp.mean(0)                                 # cross-section centroid
+    u = (perp - ctr) @ e1
+    v = (perp - ctr) @ e2
+    r = np.hypot(u, v)
+    theta = np.arctan2(v, u)
+    return r, theta, z, ctr, a_hat, e1, e2
+
+def estimate_template_bounds(frac_known, cell, r_percentile=95.0,
+                             r_lo_percentile=5.0):
+    """Per-template cylindrical bounds from a pinned skeleton (numpy, build time).
+
+    frac_known: (N, 3) fractional coords. cell: (3, 3) row-vector lattice. Returns
+    a dict {axis, r_max, r_min, centroid, a_hat, e1, e2} where r_max is the
+    skeleton's r_percentile-th radius (a robust "tube radius" from the forensics
+    analysis), r_min is its r_lo_percentile-th radius (the wall's inner edge), and
+    the frame vectors are Cartesian (A). The sc='alx' envelope ignores r_min (it
+    stays one-sided via r_lo=0); the sc='shl' shell uses [r_min, r_max] as the band
+    that confines every generated atom."""
+    frac = np.asarray(frac_known, dtype=float) % 1.0
+    cell = np.asarray(cell, dtype=float)
+    cart = frac @ cell
+    axis = detect_tube_axis(frac)
+    r, theta, z, ctr, a_hat, e1, e2 = cylindrical_frame(cart, cell, axis)
+    r_max = float(np.percentile(r, r_percentile)) if r.size else 0.0
+    r_min = float(np.percentile(r, r_lo_percentile)) if r.size else 0.0
+    return {'axis': int(axis), 'r_max': r_max, 'r_min': r_min, 'centroid': ctr,
+            'a_hat': a_hat, 'e1': e1, 'e2': e2}
+
+# The on-device torch radial pull used inside the sampler lives in
+# scigen.pl_modules.diff_utils.apply_radial_pull (kept there to avoid a circular
+# import, since sc_utils imports from that module).
+
+
+def reflect_across_line(coords, line):
     """
     Reflects multiple points across a line defined by `line = [a, b]` corresponding to `y = ax + b`.
     
@@ -483,8 +554,46 @@ class SC_DBTemplate(SC_Base):
             self.mask_t = torch.zeros_like(self.mask_t)
 
 
+# --- Geometric-shell constraint (real tube SHAPE, no atoms pinned) ------------
+
+class SC_DBShell(SC_Base):
+    """Pin only the *geometry* of a real Alexandria 1D tube, not its atoms (sc='shl').
+
+    Where SC_DBTemplate pins every template atom (leaving almost no room for
+    generation), this keeps the template's cell (so the tube axis, axial period and
+    vacuum box define a meaningful (r, theta, z) frame) but pins NO atoms: num_known
+    is 0, so mask_x/mask_t are all-zero and the diffusion model generates every
+    atom's position AND species freely. A soft, psi(t)-ramped radial band
+    [r_min, r_max] (computed by gen_utils from the template and carried on the batch)
+    confines all atoms onto the wall shell during denoising -- enforcing "tube
+    shaped" without dictating what fills it.
+
+    The template's frac/atomic-numbers are accepted only so gen_utils can measure
+    the band from the same object; they are intentionally discarded here. Requires
+    reduced_mask=False. The target atom count (= template nsites) is set by
+    gen_utils via self.num_atom before frac_coords_all()/atm_types_all() run.
+    """
+    def __init__(self, bond_len, num_atom, type_known, frac_z, c_vec_cons,
+                 reduced_mask, device, frac_known=None, atom_numbers_known=None,
+                 cell=None):
+        super().__init__(bond_len, num_atom, type_known, frac_z, c_vec_cons,
+                         reduced_mask, device)
+        # Fix the real cell; pin no atoms (geometry-only constraint).
+        self.cell = torch.as_tensor(cell, dtype=torch.float, device=device)
+        self.frac_known = torch.zeros(0, 3, dtype=torch.float)
+        self.num_known = 0
+        a, b = self.cell[0].norm().item(), self.cell[1].norm().item()
+        self.a_len, self.b_len, self.c_len = a, b, self.cell[2].norm().item()
+
+    def get_mask_l(self):
+        # Pin the WHOLE real cell (a, b AND the c tube axis) so the (r, theta, z)
+        # frame and vacuum box stay the template's ground-truth geometry.
+        return mask_l_allfixed
+
+
 # NTGEN is nanotube-only: generalized skeleton tube ('ntb'), carbon nanotube
-# ('cnt'), real database templates ('alx'), and the unconstrained vanilla model
+# ('cnt'), real database templates pinned atom-by-atom ('alx'), real tube geometry
+# with free de-novo generation ('shl'), and the unconstrained vanilla model
 # ('van'). Extend with new tube types here.
 sc_dict = {'ntb': SC_Nanotube, 'cnt': SC_CarbonTube,
-           'alx': SC_DBTemplate, 'van': SC_Vanilla}
+           'alx': SC_DBTemplate, 'shl': SC_DBShell, 'van': SC_Vanilla}

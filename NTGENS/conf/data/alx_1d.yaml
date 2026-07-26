@@ -7,9 +7,10 @@ graph_method: crystalnn
 lattice_scale_method: scale_length
 preprocess_workers: 30
 readout: mean
-# Alexandria 1D nanotubes run large: the template cache ceiling is 64 atoms
-# (data/alx_1D/build_templates.py MAX_NATM). Keep this in sync with build_train_csv.py.
-max_atoms: 64
+# Pinning-template ceiling. build_templates.py --reduce tiered shrinks every oversized
+# synthetic tube to a small periodic cell (<= --target-natm), so the ceiling matches
+# that target. Keep this >= build_templates.py's --target-natm (printed at build time).
+max_atoms: 128
 otf_graph: false
 eval_model_name: mp20
 tolerance: 0.1
