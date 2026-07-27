@@ -35,29 +35,17 @@ Because the known atoms are re-imposed at *every* timestep, they never drift —
 
 Fractional coordinates live on a **periodic** domain: `0.99` and `0.01` are close (they wrap around the cell). A plain Gaussian doesn't respect this. NTGEN uses a **wrapped normal** distribution and score-matches against it via `p_wrapped_normal` / `d_log_p_wrapped_normal` in [`ntgent/pl_modules/diff_utils.py`](../ntgent/pl_modules/diff_utils.py). This is standard for DiffCSP-family models and is what makes coordinate diffusion behave correctly under periodic boundary conditions.
 
-## 4. "Pathway 3": real structures as pinned templates
+## 4. "Pathway 3": real structures as geometry templates
 
-NTGEN offers three ways to obtain the known skeleton:
-- **Parametric** — synthesize geometry from a few numbers (`SC_Nanotube` ring, `SC_CarbonTube` rolled graphene).
-- **Database template ("Pathway 3")** — pin an *actual* structure from the Alexandria 1D database (`SC_DBTemplate`, `alx`). This grounds generation in real, DFT-relaxed nanotube geometries instead of idealized ones. → [nanotube-template-db.md](components/nanotube-template-db.md).
+NTGEN offers two ways to shape generation:
+- **Database template ("Pathway 3")** — draw an *actual* structure from the Alexandria 1D database and use its **geometry** (`SC_DBShell`, `shl`). This grounds generation in real, DFT-relaxed nanotube shapes instead of idealized ones, while leaving every atom for the model to generate. → [nanotube-template-db.md](components/nanotube-template-db.md).
 - **None** (`SC_Vanilla`) — unconstrained baseline.
 
 ## 5. Nanotube geometry cheat-sheet
 
-**Skeleton ring (`SC_Nanotube`).** `n_circ` atoms evenly spaced on a circle of radius
-```
-R = bond_len / (2·sin(π / n_circ))
-```
-so adjacent ring atoms sit one `bond_len` apart. The tube axis is `c` (periodic, vertical); `a,b` form a vacuum box (`2R + vacuum`) so transverse periodic images don't interact.
+**Geometric shell (`SC_DBShell`).** The template's real cell fixes the tube frame — axis `a_hat` (the lattice direction the atoms fill most), transverse basis `e1, e2` (Gram-Schmidt, robust to non-orthogonal cells), and cross-section centroid. Each atom's transverse radius `r = |perp − centroid|` is confined to a band `[r_min, r_max]` measured (by percentile) from the template's own atom radii, so generation is "tube-shaped" without pinning any atom. → [structural-constraints.md](components/structural-constraints.md).
 
-**Carbon nanotube (`SC_CarbonTube`).** Defined by chiral indices `(n,m)`. With graphene constant `a = a_cc·√3` and `d_R = gcd(2n+m, 2m+n)`:
-```
-circumference |Ch| = a·√(n² + nm + m²)
-radius R          = |Ch| / (2π)
-axial period |T|  = √3·|Ch| / d_R
-wall atoms N      = 4(n² + nm + m²) / d_R
-```
-Positions around/along the tube are exact integer rationals, so periodic duplicates collapse without floating-point tolerance games (`_wall_frac_coords`, with an assertion that the built count equals `num_wall`). Small chiralities `[(3,3),(4,4),(5,5),(4,0),(5,0)]` keep `N ≤ 24` for the carbon_24 workflow. → [structural-constraints.md](components/structural-constraints.md).
+**Private synthetic-ring fallback (`_SC_NanotubeFallback`).** When no real template fits the atom-count range, `shl` falls back to `n_circ` atoms evenly spaced on a circle of radius `R = bond_len / (2·sin(π / n_circ))` (adjacent ring atoms one `bond_len` apart), tube axis `c` (periodic, vertical), `a,b` a vacuum box (`2R + vacuum`). Not a user-facing mode.
 
 ## 6. Post-generation validity screening
 

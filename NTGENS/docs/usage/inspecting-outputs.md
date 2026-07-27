@@ -66,12 +66,12 @@ Batch-convert all `lattices` to `(lengths, angles)` (a torch version of the same
 
 ## 3. Nanotube-specific caveats
 
-These three checks were designed for **bulk 3D crystals**. A nanotube generation cell is a tube embedded in a large vacuum box (`a, b ≈ 2×radius + vacuum`, only `c` is the physically periodic tube axis — see [technical-foundations.md](../technical-foundations.md) §5 and the `SC_Nanotube`/`SC_CarbonTube`/`SC_DBTemplate` cell construction in [structural-constraints.md](../components/structural-constraints.md)). Read the results accordingly:
+These three checks were designed for **bulk 3D crystals**. A nanotube generation cell is a tube embedded in a large vacuum box (`a, b ≈ 2×radius + vacuum`, only `c` is the physically periodic tube axis — see [technical-foundations.md](../technical-foundations.md) §5 and the `SC_DBShell` cell construction in [structural-constraints.md](../components/structural-constraints.md)). Read the results accordingly:
 
 | Check | What's real | What's an artifact |
 |---|---|---|
 | Lattice parameters | `c` — the tube's true periodic repeat length | `a`, `b` — just the vacuum-box size, not a bulk lattice constant (expect `a ≈ b`) |
-| Space group | relative comparison across candidates (e.g. "did `cnt` come out more symmetric than `alx`?") | the absolute space-group symbol — pymatgen's 3D analyzer has no notion of 1D rod/line-group symmetry, and the vacuum padding tends to collapse results toward **P1** |
+| Space group | relative comparison across candidates (e.g. "did this `shl` tube come out more symmetric than that one?") | the absolute space-group symbol — pymatgen's 3D analyzer has no notion of 1D rod/line-group symmetry, and the vacuum padding tends to collapse results toward **P1** |
 | Simulated XRD | the pattern as a relative fingerprint between candidates | peaks below roughly 2θ≈10–15°, and the pattern as a literal prediction of an experimental bulk powder measurement — both are artifacts of the vacuum-padded cell |
 
 Treat all three as **relative sanity checks across your own generated candidates**, not as literal descriptors of a bulk crystal.

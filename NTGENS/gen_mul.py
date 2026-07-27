@@ -4,7 +4,7 @@ from config_scigen import hydra_dir, job_dir
 
 ############
 model_path = join(hydra_dir, job_dir)
-dataset = 'carbon_24'   # 'carbon_24' -> all-carbon outputs (CNTs); 'mp_20' for general tubes
+dataset = 'mp_20'   # dataset whose atom-count distribution / chemistry the model was trained on
 batch_size = 200 # Number of materials to generate in one batch
 num_batches_to_samples = 250 # Number of batches to sample
 num_materials = batch_size * num_batches_to_samples
@@ -12,8 +12,8 @@ save_traj_idx = []  # List of indices to save trajectory
 num_run = 2 # Number of runs
 idx_start = 0   # Starting index
 header = 'sc'   # Header for the label
-sc_list = ['cnt']   # Nanotube constraints to generate: 'cnt' (carbon), 'ntb' (general), 'van'
-atom_list = ['C'] # known species pinned by the constraint; e.g. ['Mn', 'Fe'] for 'ntb'
+sc_list = ['shl']   # Nanotube constraints to generate: 'shl' (real tube geometry), 'van' (unconstrained)
+atom_list = ['Mn'] # known species used for bond-length sampling; e.g. ['Mn', 'Fe']
 c_scale = None  # Scaling factor for c-axis. None for no constraint
 c_vert = False   # Whether to constrain the c-axis to be vertical
 frac_z = 0.5   # Fraction of z-axis for mask. If None, frac_z is radomly selected in [0, 1).
@@ -21,8 +21,7 @@ save_cif = False # Whether to save CIF files
 ###################
 
 sc_natm_range = {   # Minimum/Maximum number of atoms in the unit cell (*minumum number of atoms is set as min(sc_natm_range[sc][0], num_known_dict[sc]))
-    'ntb': [4, 24],   # generalized 1D nanotube: >= n_circ ring atoms (n_circ in [4,10]) + decorated atoms
-    'cnt': [1, 24],   # carbon nanotube: wall has 12-20 atoms (default chiralities), decoration up to 24
+    'shl': [24, 64],  # geometric shell: real tube geometry, all atoms generated within the wall band
     'van': [1, 20],   # vanilla model (without constraint)
 }
 # sc_list = sc_natm_range.keys()

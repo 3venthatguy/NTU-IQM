@@ -5,7 +5,8 @@ from torch.utils.data import Dataset
 import numpy as np
 import random   
 import pickle as pkl
-from sc_utils import *  
+from sc_utils import *
+from sc_utils import _SC_NanotubeFallback   # private: not exported by `import *`
 from sc_natm import natm_dist
 
 
@@ -14,12 +15,12 @@ metallic_radius = {'Mn': 1.292, 'Fe': 1.277, 'Co': 1.250, 'Ni': 1.246, 'Ru': 1.3
 with open('./data/kde_bond.pkl', 'rb') as file:
     kde_dict = pkl.load(file)
 
-# --- 1D nanotube database (Pathway 3): real structures as pinned templates -----
+# --- 1D nanotube database (Pathway 3): real structures as geometry templates ---
 # The Alexandria 1D-nanotube set (7002 ASE structures) is preprocessed once into a
 # compact CSR-style npz by data/alx_1D/build_templates.py (no ase needed at run
-# time). We mmap it here and serve one real structure per draw (sc='alx'):
-# per-atom numbers + fractional coords + cell, pinned as the known skeleton for
-# SC_DBTemplate. Templates are indexed by atom count for O(1) natm_range filtering.
+# time). We mmap it here and serve one real structure per draw (sc='shl'): its cell
+# defines the tube frame + radial band for SC_DBShell (no atoms are pinned).
+# Templates are indexed by atom count for O(1) natm_range filtering.
 
 class _NanotubeTemplateDB:
     """Lazy, mmap-backed store of database nanotube templates, bucketed by natoms."""
@@ -28,8 +29,8 @@ class _NanotubeTemplateDB:
         try:
             z = np.load(path, mmap_mode='r')            # arrays stay on disk
         except FileNotFoundError:
-            print(f'Warning: {path} not found; sc="alx" falls back to SC_Nanotube. '
-                  'Run data/alx_1D/build_templates.py to create it.')
+            print(f'Warning: {path} not found; sc="shl" falls back to the synthetic '
+                  'ring geometry. Run data/alx_1D/build_templates.py to create it.')
             return
         self._numbers = z['numbers']                    # (sum N,)   int16
         self._frac = z['frac_coords']                   # (sum N, 3) float32
@@ -80,40 +81,21 @@ class _NanotubeTemplateDB:
 NANOTUBE_DB = _NanotubeTemplateDB()
 
 def nanotube_template_from_db(natm_min, natm_max, source_filter=None):
-    """Sample a 1D-nanotube template (sc='alx') that leaves room for >=1 decorating
-    atom. Returns SC_DBTemplate kwargs, or {} to fall back to the parametric
-    SC_Nanotube ('ntb').
+    """Sample a 1D-nanotube template (sc='shl') whose geometry defines the tube
+    frame + radial band. Returns SC_DBShell kwargs, or {} to fall back to the
+    private synthetic-ring _SC_NanotubeFallback.
 
-    source_filter: None -> pin from any source; 'real'/'synthetic' -> restrict to
-    that provenance (e.g. 'real' to pin only DFT structures). Ignored on untagged
+    source_filter: None -> draw from any source; 'real'/'synthetic' -> restrict to
+    that provenance (e.g. 'real' to use only DFT structures). Ignored on untagged
     caches, so old npz files behave exactly as before."""
     # num_atom must exceed num_known (= N), so cap N at natm_max - 1.
     tmpl = NANOTUBE_DB.sample(natm_min, max(natm_min, natm_max - 1),
                               source_filter=source_filter)
     return tmpl if tmpl is not None else {}
 
-def nanotube_params_from_db(bond_len=None, element=None):
-    """Parametric SC_Nanotube geometry overrides ('ntb'). Empty dict -> use the
-    NANOTUBE_DEFAULTS in sc_utils.py. (Kept as the fallback / synthetic path;
-    real structures are served by nanotube_template_from_db above.)"""
-    return {}
-
-# Hybrid seam for carbon nanotubes (SC_CarbonTube, sc='cnt'): wire a CNT database
-# here and sample {chirality, a_cc, vacuum}. Empty dict -> CARBONTUBE_DEFAULTS.
-CARBONTUBE_DB = None
-
-def carbontube_params_from_db(bond_len=None):
-    """Return SC_CarbonTube geometry overrides sampled from a CNT database.
-
-    Keys may include {'chirality', 'a_cc', 'vacuum'}. An empty dict means "use
-    SC_CarbonTube's built-in defaults (random small chirality, a_cc=1.42 A)"."""
-    if CARBONTUBE_DB is None:
-        return {}
-    return {}
-
 # Bond length fallback for known species without an entry in the metallic-bond
-# KDE (kde_bond.pkl only covers the magnetic metals above). SC_CarbonTube ignores
-# bond_len anyway (it uses a_cc), but SampleDataset.process() still samples one.
+# KDE (kde_bond.pkl only covers the magnetic metals above). Still reachable for a
+# 'C' known species; SampleDataset.process() always samples one bond length.
 fallback_bond_len = {'C': 1.42}
 
 def convert_seconds_short(sec):
@@ -163,17 +145,16 @@ class SampleDataset(Dataset):
         self.c_vec_cons = c_vec_cons
         self.reduced_mask = reduced_mask
         self.device = device
-        # Template/skeleton-dominated mode: when set, num_atom = num_known + a small
-        # random number of decorator atoms (0..max_decorators), bypassing the dataset
-        # atom-count distribution. Required to pin whole real templates (num_known can
-        # exceed the dataset's ~20-atom support, which would otherwise zero the
-        # distribution and crash). None -> legacy distribution sampling.
+        # Decorator-count override: when set, num_atom = num_known + a small random
+        # number of atoms (0..max_decorators), bypassing the dataset atom-count
+        # distribution. 'shl' ignores it (it uses the drawn tube's nsites); None ->
+        # distribution sampling.
         self.max_decorators = max_decorators
-        # Provenance filter for sc='alx' pinning: None -> any template, 'real' or
-        # 'synthetic' -> pin only that source (see nanotube_template_from_db).
+        # Provenance filter for sc='shl' template draws: None -> any template,
+        # 'real' or 'synthetic' -> draw only that source (see
+        # nanotube_template_from_db).
         self.template_source = template_source
-        # Inner band-edge percentile for the sc='shl' shell (r_min); ignored by
-        # 'alx' (its envelope stays one-sided).
+        # Inner band-edge percentile for the sc='shl' shell (r_min).
         self.r_lo_percentile = r_lo_percentile
         # v2 radial density guidance: KDE bandwidth multiplier (empirical wall
         # thickness; <1 sharpens) and the per-template force-table grid resolution.
@@ -240,28 +221,17 @@ class SampleDataset(Dataset):
         # self.get_num_atoms()
         for i, (sc, type_known, bond_len, frac_z_known) in enumerate(zip(self.sc_list, self.type_known_list, self.bond_len_list, self.frac_z_known_list)):
             sc_obj = sc_dict[sc]
-            # Nanotubes take extra geometry overrides drawn from the DB (hybrid);
-            # {} for all other constraints leaves their signature unchanged.
-            if sc == 'alx':
-                # Real 1D-nanotube template pinned as the known skeleton. If no
-                # template fits natm_range, fall back to the parametric SC_Nanotube.
-                extra_kwargs = nanotube_template_from_db(
-                    self.natm_min, self.natm_max, source_filter=self.template_source)
-                if not extra_kwargs:
-                    sc_obj = sc_dict['ntb']
-            elif sc == 'shl':
+            # 'shl' takes real tube geometry drawn from the DB; {} for 'van' leaves
+            # its signature unchanged.
+            if sc == 'shl':
                 # Real 1D-nanotube GEOMETRY only: the template's cell defines the
                 # tube frame + radial band, but NO atoms are pinned (num_known=0);
-                # the model generates every atom, confined to the shell. Same DB
-                # draw as 'alx'; empty -> fall back to the parametric SC_Nanotube.
+                # the model generates every atom, confined to the shell. If no
+                # template fits natm_range, fall back to the private synthetic ring.
                 extra_kwargs = nanotube_template_from_db(
                     self.natm_min, self.natm_max, source_filter=self.template_source)
                 if not extra_kwargs:
-                    sc_obj = sc_dict['ntb']
-            elif sc == 'ntb':
-                extra_kwargs = nanotube_params_from_db(bond_len, type_known)
-            elif sc == 'cnt':
-                extra_kwargs = carbontube_params_from_db(bond_len)
+                    sc_obj = _SC_NanotubeFallback
             else:
                 extra_kwargs = {}
             sc_material = sc_obj(bond_len=bond_len,
@@ -300,17 +270,13 @@ class SampleDataset(Dataset):
             sc_material.frac_coords_all()
             sc_material.atm_types_all()
 
-            # Cylindrical bounds from a real template. 'alx' measures the band from
-            # its pinned skeleton (frac_known); 'shl' measures it from the drawn
-            # template's atoms (which are otherwise discarded, since num_known=0).
-            # Fallback 'ntb' and all other constraints get None -> the radial
-            # confinement is disabled downstream.
-            used_real_template = (sc in ('alx', 'shl') and bool(extra_kwargs))
+            # Cylindrical bounds from a real template. 'shl' measures the band from
+            # the drawn template's atoms (which are otherwise discarded, since
+            # num_known=0). The synthetic-ring fallback and 'van' get None -> the
+            # radial confinement is disabled downstream.
+            used_real_template = (sc == 'shl' and bool(extra_kwargs))
             if used_real_template:
-                if sc == 'shl':
-                    frac_np = np.asarray(extra_kwargs['frac_known'], dtype=float)
-                else:
-                    frac_np = sc_material.frac_known.detach().cpu().numpy()
+                frac_np = np.asarray(extra_kwargs['frac_known'], dtype=float)
                 cell_np = sc_material.cell.detach().cpu().numpy()
                 bounds = estimate_template_bounds(
                     frac_np, cell_np, r_lo_percentile=self.r_lo_percentile)
@@ -352,9 +318,9 @@ class SampleDataset(Dataset):
             bounds = self.tube_bounds_list[index]
             if bounds is not None:
                 is_alx_, r_max_, axis_ = 1.0, float(bounds['r_max']), int(bounds['axis'])
-                # Inner band edge: 'shl' confines all atoms into [r_min, r_max];
-                # 'alx' leaves it 0 (one-sided envelope on decorators only).
-                r_min_ = float(bounds['r_min']) if self.sc_list[index] == 'shl' else 0.0
+                # Inner band edge: 'shl' confines all atoms into [r_min, r_max]
+                # (two-sided shell).
+                r_min_ = float(bounds['r_min'])
                 centroid_ = torch.as_tensor(bounds['centroid'], dtype=torch.float)
                 a_hat_ = torch.as_tensor(bounds['a_hat'], dtype=torch.float)
                 e1_ = torch.as_tensor(bounds['e1'], dtype=torch.float)

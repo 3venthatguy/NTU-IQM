@@ -8,7 +8,7 @@ max_neighbors: 20  # maximum number of neighbors for OTF graph bulding in decode
 radius: 7.  # maximum search radius for OTF graph building in decoder
 timesteps: 1000
 
-# --- Constrained-sampling controls (sc='alx' nanotube generation) -------------
+# --- Constrained-sampling controls (sc='shl' nanotube generation) -------------
 # These document the knobs for progressive skeleton pinning and the cylindrical
 # radial envelope. NOTE: at generation time the sampler reads these off runtime
 # attributes set on the loaded model (model.pin_cfg / model.cyl_cfg in
@@ -27,8 +27,7 @@ cylindrical_masking:
   margin: 0.1             # r_hi = r_max * (1 + margin); outer headroom
   r_lo_percentile: 5.0    # inner band edge percentile (sc='shl' shell only)
   max_strength: 1.0       # peak radial pull (scaled by psi(t) each step)
-  # Band semantics: sc='alx' uses a one-sided ceiling (r_lo=0, pulls only decorators
-  # that stray past r_hi inward); sc='shl' uses the two-sided band [r_min, r_max*(1+margin)]
+  # Band semantics: sc='shl' uses the two-sided band [r_min, r_max*(1+margin)]
   # to confine EVERY generated atom onto the wall shell (no atoms pinned).
 radial_density_guidance:  # v2: concentrate atoms onto the wall WITHIN the band
   enabled: false          # true -> nudge each atom up d/dr log rho(r) toward the wall

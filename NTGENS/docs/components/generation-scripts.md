@@ -27,15 +27,15 @@ Invoked by `gen_mul.py` or directly. Flow:
 5. Concatenate outputs, convert lattice → `(lengths, angles)` via `lattices_to_params_shape`.
 6. `torch.save` a dict to `<model_path>/eval_gen_<label>.pt`.
 
-**Key CLI args:** `--model_path`, `--dataset`, `--sc` (nargs, default `['cnt']`), `--natm_range`, `--known_species`, `--c_scale`, `--c_vert`, `--frac_z`, `--reduced_mask`, `--save_traj`, `--batch_size`, `--num_batches_to_samples`, `--label`.
+**Key CLI args:** `--model_path`, `--dataset`, `--sc` (nargs, default `['shl']`), `--natm_range`, `--known_species`, `--c_scale`, `--c_vert`, `--frac_z`, `--reduced_mask`, `--save_traj`, `--batch_size`, `--num_batches_to_samples`, `--label`, plus the `shl` shell knobs `--template_source`, `--cyl_masking`, `--cyl_r_lo_pct`, `--density_guidance`, `--bandwidth_scale`.
 
 **Output contract (`eval_gen_<label>.pt`):** a dict with `frac_coords`, `atom_types`, `lengths`, `angles`, `num_atoms`, `num_known`, plus (if `--save_traj`) `all_frac_coords` / `all_atom_types` / `all_lattices` / `all_lengths` / `all_angles`, and metadata (`c_vec_cons`, `seed`, `time`). Every downstream script reads this file.
 
 ## `gen_utils.py` — building the conditioning batch
 Home of **`SampleDataset(Dataset)`**, the PyG dataset that turns constraint choices into pinned `Data` objects. Pipeline (per [data-flow.md](../architecture/data-flow.md) stages 2–3):
 - `num_atom_distribution()` — loads empirical atom-count distributions (`sc_natm.natm_dist`), keyed by dataset or constraint.
-- `process()` — for each sample: pick a constraint from `sc_list`; sample a bond length (KDE from `kde_bond.pkl`, or Gaussian from `metallic_radius` when `bond_sigma_per_mu` is set, or `fallback_bond_len` for `C`); instantiate the `SC_*` class; for `alx` fetch a DB template (`nanotube_template_from_db`, falling back to `ntb` if none fits); sample `num_atom`; call `frac_coords_all()` / `atm_types_all()`.
-- `generate_dataset()` — wrap into PyG `Data` with `num_atoms`, `num_known`, `frac_coords_known`, `lattice_known`, `atom_types_known`, `mask_x/mask_l/mask_t`. **Sets `atom_types = [6]*N` when `dataset == 'carbon_24'`** (the carbon-flattening special case — see [known-discrepancies.md](../known-discrepancies.md)).
+- `process()` — for each sample: pick a constraint from `sc_list`; sample a bond length (KDE from `kde_bond.pkl`, or Gaussian from `metallic_radius` when `bond_sigma_per_mu` is set, or `fallback_bond_len` for `C`); instantiate the `SC_*` class; for `shl` fetch a DB template (`nanotube_template_from_db`, falling back to the private `_SC_NanotubeFallback` if none fits) and measure the radial band; set `num_atom`; call `frac_coords_all()` / `atm_types_all()`.
+- `generate_dataset()` — wrap into PyG `Data` with `num_atoms`, `num_known`, `frac_coords_known`, `lattice_known`, `atom_types_known`, `mask_x/mask_l/mask_t`, plus the `shl` shell metadata (`is_alx`, `r_min`, `r_max`, `tube_*`, `dens_*`). **Sets `atom_types = [6]*N` when `dataset == 'carbon_24'`** (the carbon-flattening special case — see [known-discrepancies.md](../known-discrepancies.md)).
 
 Also here: the nanotube template DB glue — `class _NanotubeTemplateDB`, `NANOTUBE_DB` singleton, `nanotube_template_from_db`, plus `metallic_radius`, `fallback_bond_len = {'C': 1.42}`, and `set_seeds`. Detail in [nanotube-template-db.md](nanotube-template-db.md).
 
@@ -62,7 +62,7 @@ Also here: the nanotube template DB glue — `class _NanotubeTemplateDB`, `NANOT
 **Complementary notebook path:** before running any of the above, the generation notebooks convert the raw tensors straight to `pymatgen.Structure` in memory and run lattice-parameter/space-group/XRD sanity checks — a faster, visual first pass than `compute_metrics.py`. See [usage/inspecting-outputs.md](../usage/inspecting-outputs.md).
 
 ## Batch drivers (top level)
-- **`gen_mul.py`** — edit the params block (`dataset`, `batch_size`, `num_batches_to_samples`, `sc_list`, `atom_list`, `frac_z`, `sc_natm_range`, …) then `python gen_mul.py`; it loops `sc_list × num_run` and shells out to `script/generation.py`, optionally calling `save_cif.py`. Current defaults target CNTs: `dataset='carbon_24'`, `sc_list=['cnt']`, `atom_list=['C']`.
+- **`gen_mul.py`** — edit the params block (`dataset`, `batch_size`, `num_batches_to_samples`, `sc_list`, `atom_list`, `frac_z`, `sc_natm_range`, …) then `python gen_mul.py`; it loops `sc_list × num_run` and shells out to `script/generation.py`, optionally calling `save_cif.py`. Current defaults target the geometric shell: `dataset='mp_20'`, `sc_list=['shl']`, `sc_natm_range={'shl': [24, 64], 'van': [1, 20]}`.
 - **`screen_mul.py`** — batch screening driver. ⚠ **Stale:** its `sc_list` still lists the old 2D lattice names (`tri`, `hon`, …), not the nanotube constraints. See [known-discrepancies.md](../known-discrepancies.md) §2.
 
 ## Next

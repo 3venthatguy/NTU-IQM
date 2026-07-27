@@ -7,7 +7,7 @@
 |---|---|
 | **DiffCSP** | Diffusion for Crystal Structure Prediction — the base model NTGEN derives from. Joint diffusion over lattice, fractional coords, atom types. Pristine copy in `../comp_models/DiffCSP-main/`. |
 | **SCIGEN** | *Structural Constraint Integration in the GENerative model*. Adds the inpainting sampler + `SC_*` constraint classes on top of DiffCSP. arXiv:2407.04557. |
-| **NTGEN** | This repo: SCIGEN specialized to **nanotubes only** (`ntb`/`cnt`/`alx`/`van`), plus a real-structure template DB. |
+| **NTGEN** | This repo: SCIGEN specialized to **nanotubes only** (`shl`/`van`), plus a real-structure template DB. |
 | **CSP** | Crystal Structure Prediction — predicting stable atomic arrangements. |
 | **CSPDiffusion** | The diffusion model class actually used, in `ntgent/pl_modules/diffusion_w_type.py`. |
 | **DDPM** | Denoising Diffusion Probabilistic Model — the noise-then-denoise generative framework. |
@@ -16,9 +16,7 @@
 | **known / unknown atoms** | Known = pinned skeleton (mask=1); unknown = model-generated decorators (mask=0). |
 | **`mask_x` / `mask_t` / `mask_l`** | Per-sample masks marking fixed fractional coords `(N,3)`, atom types `(N,)`, lattice entries `(3,3)`. 1 = pinned. |
 | **wrapped normal** | A normal distribution on a periodic domain; used for fractional-coordinate diffusion (`diff_utils.py`). |
-| **chirality `(n,m)`** | Integer indices defining how a graphene sheet is rolled into a CNT; set radius, axial period, and wall-atom count. |
-| **`num_wall`** | CNT wall-atom count per axial period: `4(n²+nm+m²)/d_R`. |
-| **Pathway 3** | The strategy of pinning a **real** database structure as the known skeleton (vs. synthesizing one). Implemented by `SC_DBTemplate` / the Alexandria DB. |
+| **Pathway 3** | The strategy of grounding generation in a **real** database structure (vs. synthesizing one). Implemented by `SC_DBShell` / the Alexandria DB — `shl` uses the real tube's geometry as a radial shell. |
 | **Alexandria 1D DB** | Source of ~7002 real 1D-nanotube structures (`data/alx_1D/`), multi-element compounds. |
 | **template cache (`.npz`)** | `nanotube_templates.npz` — CSR-packed, mmap-friendly, ASE-free cache built by `build_templates.py`. |
 | **CSR arrays** | Compressed-Sparse-Row packing: flat concatenated arrays + a `splits` row-pointer to slice per structure. |

@@ -26,16 +26,15 @@ The output is a set of structures saved as a `.pt` tensor bundle, convertible to
 NTGEN is **nanotube-only**. The dispatch table in [`script/sc_utils.py`](../script/sc_utils.py) (bottom of file) is:
 
 ```python
-sc_dict = {'ntb': SC_Nanotube,   'cnt': SC_CarbonTube,
-           'alx': SC_DBTemplate,  'van': SC_Vanilla}
+sc_dict = {'shl': SC_DBShell, 'van': SC_Vanilla}
 ```
 
 | Key | Class | What it pins |
 |---|---|---|
-| `ntb` | `SC_Nanotube` | A **parametric** skeleton ring — `n_circ` atoms of one element around a tube axis. |
-| `cnt` | `SC_CarbonTube` | A **full rolled-graphene** carbon-nanotube wall for chiral indices `(n,m)`. Species forced to `C`. |
-| `alx` | `SC_DBTemplate` | A **real** multi-element nanotube structure loaded from the Alexandria 1D database. |
+| `shl` | `SC_DBShell` | A **real tube's geometry only** — the Alexandria 1D template's cell defines a radial shell band; **no atoms are pinned**, so the model generates every atom's position and species inside the wall. |
 | `van` | `SC_Vanilla` | **No constraint** — plain unconditional diffusion (baseline). |
+
+> Earlier atom-pinning modes (`ntb` parametric ring, `cnt` rolled-graphene wall, `alx` real structure pinned atom-by-atom) were **removed**: they pinned most or all atoms, leaving nothing for the model to generate. `shl` keeps only the shape. (A private synthetic-ring fallback, `_SC_NanotubeFallback`, survives internally as `shl`'s safety net when no template fits the requested atom-count range — it is not a user-facing mode.)
 
 > The upstream 2D-lattice constraints (`tri`, `hon`, `kag`, …) were **deliberately removed**. The top-level `README.md` still documents them — see [known-discrepancies.md](known-discrepancies.md) §1. Details of each class in [components/structural-constraints.md](components/structural-constraints.md).
 
@@ -47,8 +46,7 @@ NTU-IQM/
 ├── comp_models/     ← companion material:
 │   ├── DiffCSP-main/         upstream, unmodified DiffCSP reference
 │   └── NTGEN_generation/     the driver notebooks:
-│       ├── ntgen_generation.ipynb    (sc='alx', Alexandria templates + mp_20)
-│       ├── 05_ctgen_generation.ipynb (sc='cnt', carbon_24)
+│       ├── ntgen_generation.ipynb    (sc='shl', Alexandria tube geometry + mp_20)
 │       └── 04_scigen_generation.ipynb (original 2D-lattice SCIGEN demo)
 └── README.md
 ```

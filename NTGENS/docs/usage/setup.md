@@ -52,13 +52,13 @@ models/mp_20/
 ├── lattice_scaler.pt           fitted StandardScaler (lattice)
 └── prop_scaler.pt              fitted StandardScaler (property)
 ```
-For **carbon-native** generation you need a checkpoint trained on carbon_24 — none ships locally; see [`RETRAIN_CARBON.md`](../../RETRAIN_CARBON.md) and [workflows.md](workflows.md).
+For **nanotube-native** generation (the recommended checkpoint for `shl`) you need a model trained on the Alexandria 1D data — none ships locally; see [`RETRAIN_ALX.md`](../../RETRAIN_ALX.md) and [workflows.md](workflows.md).
 
-## 6. Build the nanotube template cache (only for `sc='alx'`)
+## 6. Build the nanotube template cache (only for `sc='shl'`)
 ```bash
 python data/alx_1D/build_templates.py     # pkl → nanotube_templates.npz (run once)
 ```
-If `nanotube_templates.npz` is absent at runtime, `sc='alx'` prints a warning and falls back to the parametric `ntb`. Detail: [nanotube-template-db.md](../components/nanotube-template-db.md).
+If `nanotube_templates.npz` is absent at runtime, `sc='shl'` prints a warning and falls back to the private synthetic ring geometry. Detail: [nanotube-template-db.md](../components/nanotube-template-db.md).
 
 ## Environment caveats (important)
 - **No GPU / no `torch_geometric` / `torch_scatter`** in the local envs on the original dev Mac — **full generation and training must run elsewhere** (a GPU box / Colab). The notebooks in `../comp_models/NTGEN_generation/` are Colab-oriented for exactly this reason.
@@ -67,9 +67,9 @@ If `nanotube_templates.npz` is absent at runtime, `sc='alx'` prints a warning an
 ## Verify the setup
 ```bash
 ls -l scigen                                          # symlink present?
-python scigen/run.py data=carbon_24 model=diffusion_w_type expname=smoke --cfg job
+python scigen/run.py data=mp_20 model=diffusion_w_type expname=smoke --cfg job
 ```
-The second command resolves and prints the composed Hydra config **without training** — a fast smoke test that the symlink, env, and configs all load. (`--cfg job` is documented in `RETRAIN_CARBON.md`.)
+The second command resolves and prints the composed Hydra config **without training** — a fast smoke test that the symlink, env, and configs all load. (`--cfg job` is documented in `RETRAIN_ALX.md`.)
 
 ## Next
 

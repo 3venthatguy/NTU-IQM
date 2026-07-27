@@ -60,7 +60,7 @@ The DiffCSP-derived model and its data plumbing. Knows nothing about nanotubes �
 The nanotube-specific business logic layered on top of the model: define the known skeleton (`sc_utils.py`), assemble it into a batch of pinned conditioning data (`gen_utils.py`), run the sampler (`generation.py`), and post-process. → [components/structural-constraints.md](../components/structural-constraints.md), [components/generation-scripts.md](../components/generation-scripts.md).
 
 ### Template data (`data/alx_1D/`)
-The real-structure database feature. A one-time ETL (`build_templates.py`) compresses ~7000 ASE nanotube structures into an mmap-friendly `.npz`; at runtime the `alx` constraint samples real skeletons from it. → [components/nanotube-template-db.md](../components/nanotube-template-db.md).
+The real-structure database feature. A one-time ETL (`build_templates.py`) compresses ~7000 ASE nanotube structures into an mmap-friendly `.npz`; at runtime the `shl` constraint samples real tube geometries from it. → [components/nanotube-template-db.md](../components/nanotube-template-db.md).
 
 ### Post-processing & screening
 Operates purely on the `eval_gen_<label>.pt` bundle that generation produces: CIF export, trajectory movies, benchmark metrics, and a GNN-classifier screening cascade (`gnn_eval/`). → [components/gnn-screening.md](../components/gnn-screening.md).
@@ -70,7 +70,7 @@ Operates purely on the `eval_gen_<label>.pt` bundle that generation produces: CI
 This is a **research codebase**, not an application. There is intentionally no `main.py`. Instead, three styles of entry point coexist:
 
 - **Editable "config scripts"** you copy and edit, then run (`config_scigen.py`, `gen_mul.py`, `screen_mul.py`).
-- **argparse CLIs** under `script/` invoked with flags (`python script/generation.py --sc alx …`).
+- **argparse CLIs** under `script/` invoked with flags (`python script/generation.py --sc shl …`).
 - **Jupyter notebooks** (in `../comp_models/NTGEN_generation/`) as the friendliest driver for the full nanotube workflow.
 
 This matters for agents: to "run generation," you either edit-and-run `gen_mul.py` or call `script/generation.py` directly — see [usage/workflows.md](../usage/workflows.md).

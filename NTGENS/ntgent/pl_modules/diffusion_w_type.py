@@ -22,7 +22,7 @@ from scigen.common.data_utils import (
     EPSILON, cart_to_frac_coords, mard, lengths_angles_to_volume, lattice_params_to_matrix_torch,
     frac_to_cart_coords, min_distance_sqr_pbc)
 
-from scigen.pl_modules.diff_utils import d_log_p_wrapped_normal, pinning_strength, apply_radial_pull, apply_radial_band, apply_density_force
+from scigen.pl_modules.diff_utils import d_log_p_wrapped_normal, pinning_strength, apply_radial_band, apply_density_force
 
 
 MAX_ATOMIC_NUM=100
@@ -250,11 +250,11 @@ def sample_scigen(self, batch, diff_ratio = 1.0, step_lr = 1e-5):
     geom_on = cyl_on or dens_on
     if geom_on:
         node_batch = batch.batch
-        pull_gate = batch.is_alx[node_batch]                      # (N,) 1 for tube graphs
+        pull_gate = batch.is_alx[node_batch]                      # (N,) 1 for tube graphs (legacy flag name)
         r_hi_atom = batch.r_max[node_batch] * (1.0 + float((cyl_cfg or {}).get('margin', 0.0)))
-        # Inner band edge: 0 for the 'alx' envelope (one-sided, decorators only),
-        # r_min for the 'shl' shell (two-sided, confines every atom into the wall).
-        # Older batches without r_min fall back to 0 -> the original envelope.
+        # Inner band edge: r_min for the 'shl' shell (two-sided, confines every atom
+        # into the wall). Older batches without r_min fall back to a one-sided
+        # ceiling (r_lo=0).
         r_lo_atom = (batch.r_min[node_batch] if hasattr(batch, 'r_min')
                      else torch.zeros_like(r_hi_atom))
         centroid_atom = batch.tube_centroid[node_batch]           # (N, 3)

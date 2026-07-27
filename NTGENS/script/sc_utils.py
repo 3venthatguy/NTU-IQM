@@ -156,9 +156,8 @@ def estimate_template_bounds(frac_known, cell, r_percentile=95.0,
     a dict {axis, r_max, r_min, centroid, a_hat, e1, e2} where r_max is the
     skeleton's r_percentile-th radius (a robust "tube radius" from the forensics
     analysis), r_min is its r_lo_percentile-th radius (the wall's inner edge), and
-    the frame vectors are Cartesian (A). The sc='alx' envelope ignores r_min (it
-    stays one-sided via r_lo=0); the sc='shl' shell uses [r_min, r_max] as the band
-    that confines every generated atom."""
+    the frame vectors are Cartesian (A). The sc='shl' shell uses [r_min, r_max] as
+    the band that confines every generated atom."""
     frac = np.asarray(frac_known, dtype=float) % 1.0
     cell = np.asarray(cell, dtype=float)
     cart = frac @ cell
@@ -236,8 +235,8 @@ def estimate_radial_density_force(frac_known, cell, grid_size=96,
     return {'grid_lo': grid_lo, 'grid_dr': grid_dr,
             'force': force.astype(float), 'bandwidth': h}
 
-# The on-device torch radial pull used inside the sampler lives in
-# scigen.pl_modules.diff_utils.apply_radial_pull (kept there to avoid a circular
+# The on-device torch radial confinement used inside the sampler lives in
+# scigen.pl_modules.diff_utils.apply_radial_band (kept there to avoid a circular
 # import, since sc_utils imports from that module).
 
 
@@ -383,12 +382,11 @@ class SC_Template(SC_Base):
         self.num_known = self.frac_known.shape[0]
         
 
-# --- 1D nanotube constraint (Pathway 3: mask-based generation) ----------------
+# --- Private synthetic-ring fallback for sc='shl' -----------------------------
 
-# Default geometry ranges for the hybrid parameter sampler. These act as a
-# stand-in distribution until a real 1D-nanotube database is wired in through
-# nanotube_param_sampler() in gen_utils.py (see plan File 3). SC_Nanotube draws
-# from these whenever the corresponding argument is left as None.
+# Default geometry ranges for the synthetic ring geometry. Used only by the
+# private _SC_NanotubeFallback below, which sc='shl' falls back to when the
+# Alexandria template DB has no structure in the requested atom-count range.
 NANOTUBE_DEFAULTS = {
     'n_circ_range': (4, 10),      # number of skeleton atoms around one ring
     'vacuum': 15.0,               # Angstrom padding around the tube in the x,y box
@@ -396,20 +394,22 @@ NANOTUBE_DEFAULTS = {
 }
 
 
-class SC_Nanotube(SC_Base):
+class _SC_NanotubeFallback(SC_Base):
     """
-    1D nanotube constraint (skeleton-sublattice, hybrid geometry).
+    PRIVATE synthetic-ring fallback for sc='shl' (NOT a user-facing mode).
+
+    This is not registered in sc_dict and has no CLI exposure. It exists only as
+    the safety net the sc='shl' path uses when the real 1D-nanotube template DB
+    has no structure matching the requested natm_range (see gen_utils.process()).
 
     Pins one element's skeleton atoms on a ring (the cylinder cross-section) of
     radius R around the c/z axis. The a,b lattice vectors form a large vacuum box
     so periodic images in the transverse plane do not interact; c is the periodic
     tube axis, kept vertical with free length via mask_l_cvert. The diffusion
-    model then decorates the remaining (unknown) atoms, exactly as it fills a 2D
-    motif in the other SC_* classes.
+    model then decorates the remaining (unknown) atoms.
 
-    Geometry parameters (n_circ / chirality / axial_repeat / vacuum) are the
-    "hybrid" hook: pass values drawn from a database-informed distribution, or
-    leave them None to sample from NANOTUBE_DEFAULTS.
+    Geometry parameters (n_circ / chirality / axial_repeat / vacuum) default to
+    NANOTUBE_DEFAULTS when left None.
 
     Requires reduced_mask=False so mask_x stays (N, 3) — the ring atoms are pinned
     per-coordinate.
@@ -465,168 +465,12 @@ class SC_Nanotube(SC_Base):
         return torch.cat([frac_xy, frac_z], dim=-1)
 
 
-# --- Carbon nanotube constraint (rolled graphene wall) ------------------------
-
-# Default geometry for SC_CarbonTube. Chiralities are kept small so the wall atom
-# count N = 4(n^2+nm+m^2)/d_R stays below the carbon_24 atom-count ceiling (24):
-# (3,3)->12, (4,4)->16, (5,5)->20, (4,0)->16, (5,0)->20 atoms per axial period.
-CARBONTUBE_DEFAULTS = {
-    'chirality_options': [(3, 3), (4, 4), (5, 5), (4, 0), (5, 0)],
-    'a_cc': 1.42,                 # C-C bond length in graphene (Angstrom)
-    'vacuum': 15.0,               # Angstrom padding around the tube in the x,y box
-}
-
-
-class SC_CarbonTube(SC_Base):
-    """
-    Carbon nanotube constraint (rolled graphene wall, Pathway 3).
-
-    Builds the full CNT wall for chiral indices (n, m) by the standard chiral-
-    vector construction: a graphene sheet is cut along Ch = n*a1 + m*a2 and the
-    translational vector T, then rolled so Ch becomes the tube circumference.
-    All N = 4(n^2+nm+m^2)/d_R wall atoms of one axial period are pinned as known
-    carbon atoms; the diffusion model may decorate any remaining atoms.
-
-    Same cell/mask plumbing as SC_Nanotube: a,b span a vacuum box (fixed by the
-    mask), c is the periodic tube axis (vertical, free length via mask_l_cvert).
-    Requires reduced_mask=False. type_known is forced to 'C'.
-    """
-    def __init__(self, bond_len, num_atom, type_known, frac_z, c_vec_cons,
-                 reduced_mask, device, chirality=None, a_cc=None, vacuum=None):
-        self.chirality = tuple(chirality) if chirality is not None else \
-            random.choice(CARBONTUBE_DEFAULTS['chirality_options'])
-        self.a_cc = a_cc if a_cc is not None else CARBONTUBE_DEFAULTS['a_cc']
-        self.vacuum = vacuum if vacuum is not None else CARBONTUBE_DEFAULTS['vacuum']
-
-        n, m = self.chirality
-        a = self.a_cc * math.sqrt(3)                    # graphene lattice constant
-        d_R = math.gcd(2 * n + m, 2 * m + n)
-        self.circumference = a * math.sqrt(n * n + n * m + m * m)    # |Ch|
-        self.radius = self.circumference / (2 * Pi)
-        self.axial_repeat = math.sqrt(3) * self.circumference / d_R  # |T|
-        self.num_wall = 4 * (n * n + n * m + m * m) // d_R
-
-        # The wall is carbon by construction, whatever known_species was passed.
-        super().__init__(bond_len, num_atom, 'C', frac_z, c_vec_cons,
-                         reduced_mask, device)
-
-        self.cell = self.get_cell()
-        self.frac_known = self._wall_frac_coords()
-        self.num_known = self.frac_known.shape[0]
-
-    def get_mask_l(self):
-        # Fix the vacuum box (a, b vectors); keep c vertical with free length.
-        return mask_l_cvert
-
-    def get_cell(self, gamma=90):
-        box = 2 * self.radius + self.vacuum        # vacuum box side length (A)
-        self.a_len, self.b_len, self.c_len = box, box, self.axial_repeat
-        self.cell_lengths = torch.tensor(
-            [self.a_len, self.b_len, self.c_len], dtype=torch.float, device=self.device)
-        self.cell_angles_d = torch.tensor(
-            [90, 90, gamma], dtype=torch.float, device=self.device)
-        return lattice_params_to_matrix_xy_torch(
-            self.cell_lengths.unsqueeze(0), self.cell_angles_d.unsqueeze(0)).squeeze(0)
-
-    def _wall_frac_coords(self):
-        """Enumerate one (Ch, T) cell of graphene and wrap it onto the cylinder.
-
-        The positions around (s) and along (t) the tube are exact integer
-        rationals — s = s_num / [2(n^2+nm+m^2)], t = t_num / [2(t1^2+t1*t2+t2^2)]
-        for atom p*a1 + q*a2 (+ basis) — so periodic duplicates collapse exactly,
-        with no floating-point tolerance games."""
-        n, m = self.chirality
-        d_R = math.gcd(2 * n + m, 2 * m + n)
-        t1, t2 = (2 * m + n) // d_R, -(2 * n + m) // d_R
-        s_den = 2 * (n * n + n * m + m * m)
-        t_den = 2 * (t1 * t1 + t1 * t2 + t2 * t2)
-
-        # Sweep enough graphene cells (p, q) to cover the (Ch, T) supercell; the
-        # B sublattice sits at (a1+a2)/3, contributing the b*(...) terms below.
-        span = abs(n) + abs(m) + abs(t1) + abs(t2) + 2
-        seen, s_list, t_list = set(), [], []
-        for p in range(-span, span + 1):
-            for q in range(-span, span + 1):
-                for b in (0, 1):
-                    s_num = (p * (2 * n + m) + q * (n + 2 * m) + b * (n + m)) % s_den
-                    t_num = (p * (2 * t1 + t2) + q * (t1 + 2 * t2) + b * (t1 + t2)) % t_den
-                    if (s_num, t_num) in seen:
-                        continue
-                    seen.add((s_num, t_num))
-                    s_list.append(s_num / s_den)     # position around the tube [0,1)
-                    t_list.append(t_num / t_den)     # position along the axis [0,1)
-        assert len(s_list) == self.num_wall, \
-            f'CNT({n},{m}): built {len(s_list)} wall atoms, expected {self.num_wall}'
-
-        s = torch.tensor(s_list, dtype=torch.float)
-        t = torch.tensor(t_list, dtype=torch.float)
-        theta = 2 * Pi * s
-        box_center = torch.tensor([[self.a_len / 2, self.b_len / 2]])
-        cart_xy = torch.stack([self.radius * torch.cos(theta),
-                               self.radius * torch.sin(theta)], dim=1) + box_center
-        cell_xy = self.cell[:2, :2].detach().cpu()
-        frac_xy = cart2frac(cart_xy, cell_xy)
-        frac_z = ((t + self.frac_z) % 1.0).unsqueeze(1)  # frac_z acts as axial phase
-        return torch.cat([frac_xy, frac_z], dim=-1)
-
-
-# --- Database-template constraint (real 1D nanotube pinned as known skeleton) --
-
-class SC_DBTemplate(SC_Base):
-    """Pin a real nanotube structure from the Alexandria 1D database (Pathway 3).
-
-    Unlike SC_Nanotube/SC_CarbonTube (which synthesize a geometry from a few
-    parameters), this takes an actual structure loaded by
-    gen_utils.nanotube_params_from_db: its per-atom atomic numbers, fractional
-    coordinates, and 3x3 cell. All template atoms become known/pinned; the model
-    decorates the remaining (num_atom - N) atoms. Because the templates are
-    multi-element, atm_types_all is overridden to pin each atom's real species
-    instead of a single type_known.
-
-    Requires reduced_mask=False so mask_x stays (N, 3).
-    """
-    def __init__(self, bond_len, num_atom, type_known, frac_z, c_vec_cons,
-                 reduced_mask, device, frac_known=None, atom_numbers_known=None,
-                 cell=None):
-        super().__init__(bond_len, num_atom, type_known, frac_z, c_vec_cons,
-                         reduced_mask, device)
-        # Known atomic numbers -> element-symbol indices (Z is the index into
-        # chemical_symbols, so the two coincide) for atm_types_all.
-        self.atom_numbers_known = torch.as_tensor(atom_numbers_known,
-                                                  dtype=torch.long)
-        self.frac_known = torch.as_tensor(frac_known, dtype=torch.float) % 1.0
-        self.num_known = self.frac_known.shape[0]
-        self.cell = torch.as_tensor(cell, dtype=torch.float, device=device)
-        a, b = self.cell[0].norm().item(), self.cell[1].norm().item()
-        self.a_len, self.b_len, self.c_len = a, b, self.cell[2].norm().item()
-
-    def get_mask_l(self):
-        # Pin the WHOLE real cell (a, b AND the c tube axis). The template is a real
-        # DFT structure, so its cell is the ground truth; leaving c free lets a
-        # bulk-trained model inflate the tube's period. Fixing all of it keeps the
-        # generated cell template-faithful (guards the c-axis).
-        return mask_l_allfixed
-
-    def atm_types_all(self):
-        # Pin each known atom to its real species; fill decorators randomly.
-        types_idx_known = self.atom_numbers_known.tolist()
-        n_unk = int(self.num_atom - self.num_known)
-        types_unk = random.choices(chemical_symbols[1:MAX_ATOMIC_NUM + 1], k=n_unk)
-        types_idx_unk = [chemical_symbols.index(elem) for elem in types_unk]
-        types = torch.tensor(types_idx_known + types_idx_unk)
-        mask = torch.zeros_like(types)
-        mask[:self.num_known] = 1
-        self.atom_types, self.mask_t = types, mask
-        if not self.use_constraints:
-            self.mask_t = torch.zeros_like(self.mask_t)
-
-
 # --- Geometric-shell constraint (real tube SHAPE, no atoms pinned) ------------
 
 class SC_DBShell(SC_Base):
     """Pin only the *geometry* of a real Alexandria 1D tube, not its atoms (sc='shl').
 
-    Where SC_DBTemplate pins every template atom (leaving almost no room for
+    Rather than pinning template atoms (which would leave almost no room for
     generation), this keeps the template's cell (so the tube axis, axial period and
     vacuum box define a meaningful (r, theta, z) frame) but pins NO atoms: num_known
     is 0, so mask_x/mask_t are all-zero and the diffusion model generates every
@@ -658,9 +502,9 @@ class SC_DBShell(SC_Base):
         return mask_l_allfixed
 
 
-# NTGEN is nanotube-only: generalized skeleton tube ('ntb'), carbon nanotube
-# ('cnt'), real database templates pinned atom-by-atom ('alx'), real tube geometry
-# with free de-novo generation ('shl'), and the unconstrained vanilla model
-# ('van'). Extend with new tube types here.
-sc_dict = {'ntb': SC_Nanotube, 'cnt': SC_CarbonTube,
-           'alx': SC_DBTemplate, 'shl': SC_DBShell, 'van': SC_Vanilla}
+# NTGEN is nanotube-only: real tube geometry with free de-novo generation ('shl')
+# and the unconstrained vanilla model ('van'). 'shl' pins only the tube SHAPE (a
+# soft radial band, no atoms), so the model generates every atom. Extend with new
+# tube types here. (_SC_NanotubeFallback is deliberately NOT registered — it is a
+# private synthetic-ring safety net used only by the 'shl' path.)
+sc_dict = {'shl': SC_DBShell, 'van': SC_Vanilla}

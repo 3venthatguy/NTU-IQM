@@ -76,10 +76,9 @@ def apply_radial_band(cart_xyz, r_lo, r_hi, centroid, a_hat, e1, e2, strength):
     geometric: only the transverse radius is rescaled; the axial coordinate and the
     angle are unchanged.
 
-    This generalizes a one-sided ceiling to a two-sided shell: the geometric-shell
-    mode (sc='shl') confines ALL atoms into the wall band, while the sc='alx'
-    envelope passes r_lo=0 so it only ever pulls decorators inward (never pushes an
-    atom out of a filled core).
+    The geometric-shell mode (sc='shl') confines ALL atoms into the wall band by
+    passing the two-sided [r_lo, r_hi]; passing r_lo=0 degrades it to a one-sided
+    ceiling (pull inward only) for any caller that wants that.
 
     cart_xyz: (M, 3) Cartesian coords. r_lo/r_hi: (M,) or scalar per-atom band
     edges (r_lo <= r_hi). centroid/a_hat/e1/e2: (M, 3) per-atom transverse frame
@@ -101,14 +100,6 @@ def apply_radial_band(cart_xyz, r_lo, r_hi, centroid, a_hat, e1, e2, strength):
     v_new = (v * scale).unsqueeze(-1)
     perp_new = centroid + u_new * e1 + v_new * e2
     return perp_new + z * a_hat
-
-
-def apply_radial_pull(cart_xyz, r_max, centroid, a_hat, e1, e2, strength):
-    """One-sided radial ceiling: pull atoms with r > r_max back toward r_max, leave
-    r <= r_max untouched. Thin wrapper over apply_radial_band with r_lo=0 (kept for
-    the sc='alx' envelope and any existing callers)."""
-    r_lo = torch.zeros_like(r_max) if torch.is_tensor(r_max) else 0.0
-    return apply_radial_band(cart_xyz, r_lo, r_max, centroid, a_hat, e1, e2, strength)
 
 
 def apply_density_force(cart_xyz, force_table, grid_lo, grid_dr, centroid, a_hat,

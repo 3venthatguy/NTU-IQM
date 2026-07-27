@@ -2,11 +2,11 @@
 
 The `ntgen_generation.ipynb` notebook generates with the public **mp_20** diffusion
 checkpoint. That checkpoint was trained on **≤20-atom bulk crystals with no vacuum
-and no 1D periodicity**, so it is out-of-distribution for nanotubes: even when a real
-tube is pinned as the known skeleton (`alx` / `SC_DBTemplate`), the model cannot place
-the remaining *decorator* atoms sensibly, and (before the fix) freely inflated the
-tube's c-axis. Fixes #1/#2/#4/#5 make the **pinned template** render faithfully; this
-retrain is the root fix for **decoration quality** — the mp_20-is-OOD fault (#3).
+and no 1D periodicity**, so it is out-of-distribution for nanotubes: even with the
+`shl` shell fixing a real tube's geometry (`SC_DBShell`), the model cannot place the
+generated atoms sensibly inside the wall, and (before the fix) freely inflated the
+tube's c-axis. This retrain on the Alexandria 1D nanotube data is the root fix for
+**generation quality** — the mp_20-is-OOD fault.
 
 Everything below is scaffolded in this repo; only the data-prep and the training run
 (GPU, hours–days) are left, and both must run on a machine with `pymatgen` +

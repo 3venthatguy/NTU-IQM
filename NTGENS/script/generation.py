@@ -176,16 +176,17 @@ if __name__ == '__main__':
     parser.add_argument('--bond_sigma_per_mu', default=None)   
     parser.add_argument('--use_min_bond_len', type=lambda x: x.lower() == 'true', default=False, help="Use minimum bond length with metallic radius")
     parser.add_argument('--known_species', nargs='+', default=['Mn', 'Fe', 'Co', 'Ni', 'Ru', 'Nd', 'Gd', 'Tb', 'Dy', 'Yb']) 
-    parser.add_argument('--sc', nargs='+', default=['cnt'], help="Nanotube constraints: 'cnt' (carbon), 'ntb' (general), 'alx' (pin real template), 'shl' (real tube geometry, free de-novo generation), 'van'")
+    parser.add_argument('--sc', nargs='+', default=['shl'], help="Nanotube constraints: 'shl' (real tube geometry, free de-novo generation), 'van' (unconstrained)")
     parser.add_argument('--c_scale', default=None, help="Scale to multiply bond length for LZ constraint") 
     parser.add_argument('--c_vert', type=lambda x: x.lower() == 'true', default=False, help="Use LZ constraint for vertical bonds")
     parser.add_argument('--frac_z', default=None, type=parse_none_or_value, help="Fraction of z-coordinate of the 2D geometric pattern. If None, return random frac_z in [0, 1).")
     parser.add_argument('--reduced_mask', type=lambda x: x.lower() == 'true', default=False, help="Use reduced mask")
-    # Template-dominated mode (needed for sc='alx'): pin whole template + a few decorators.
+    # Decorator-count override: num_atom = num_known + a few decorators ('shl'
+    # ignores this and uses the drawn tube's nsites).
     parser.add_argument('--max_decorators', default=None, type=lambda x: parse_none_or_value(x, int),
-                        help="alx: num_atom = num_known + randint(0, max_decorators). None -> distribution sampling.")
+                        help="num_atom = num_known + randint(0, max_decorators). None -> distribution sampling.")
     parser.add_argument('--template_source', default=None, type=lambda x: parse_none_or_value(x, str),
-                        help="alx template provenance filter: 'real' | 'synthetic' | None (any).")
+                        help="shl template provenance filter: 'real' | 'synthetic' | None (any).")
     # Progressive skeleton pinning: ramp the skeleton mask via psi(t).
     parser.add_argument('--pin_schedule', default='none', choices=['none', 'linear', 'sigmoid'],
                         help="Progressive-pinning schedule ('none' -> original binary pinning).")
@@ -193,9 +194,9 @@ if __name__ == '__main__':
     parser.add_argument('--pin_tmid', default=0.6, type=float, help="Sigmoid inflection as fraction of T.")
     parser.add_argument('--pin_psi_start', default=0.0, type=float, help="Pinning strength at t=T.")
     parser.add_argument('--pin_psi_end', default=1.0, type=float, help="Pinning strength at t=0.")
-    # Cylindrical radial envelope for decorator atoms (sc='alx').
+    # Cylindrical radial band confining atoms to the tube wall (sc='shl').
     parser.add_argument('--cyl_masking', type=lambda x: x.lower() == 'true', default=False,
-                        help="Softly keep decorator atoms within the template radius.")
+                        help="Softly confine atoms to the template's radial band (sc='shl').")
     parser.add_argument('--cyl_margin', default=0.1, type=float, help="r_hi = r_max * (1 + margin).")
     parser.add_argument('--cyl_r_lo_pct', default=5.0, type=float, help="Inner band-edge percentile for sc='shl' shell confinement.")
     parser.add_argument('--cyl_strength', default=1.0, type=float, help="Peak radial pull (scaled by psi(t)).")

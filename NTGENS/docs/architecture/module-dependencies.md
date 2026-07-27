@@ -27,7 +27,7 @@ To (re)create it, from the `NTGENS/` root:
 ln -s ntgent scigen
 ```
 
-**Symptom when missing:** `ModuleNotFoundError: No module named 'scigen'`. Check with `ls -l scigen` (should show `scigen -> ntgent`). Verified at doc-write time that the symlink can go missing after directory reorganizations, so check it first when imports fail. Rationale is also documented in [`RETRAIN_CARBON.md`](../../RETRAIN_CARBON.md).
+**Symptom when missing:** `ModuleNotFoundError: No module named 'scigen'`. Check with `ls -l scigen` (should show `scigen -> ntgent`). Verified at doc-write time that the symlink can go missing after directory reorganizations, so check it first when imports fail. Rationale is also documented in [`RETRAIN_ALX.md`](../../RETRAIN_ALX.md).
 
 ## Two import styles coexist
 

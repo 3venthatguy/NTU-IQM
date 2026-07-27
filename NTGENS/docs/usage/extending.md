@@ -13,14 +13,14 @@ The `SC_*` classes in [`script/sc_utils.py`](../../script/sc_utils.py) follow a 
    - `self.frac_known` — the fixed skeleton fractional coords `(num_known, 3)`.
    - `self.num_known = self.frac_known.shape[0]`.
    - Override `get_mask_l()` if you need a specific lattice mask (tube constraints return `mask_l_cvert`).
-   - Override `atm_types_all()` only if you pin **per-atom** species (like `SC_DBTemplate`); otherwise the base method pins a single `type_known` and randomizes decorators.
+   - Override `atm_types_all()` only if you need custom per-atom species handling; otherwise the base method pins a single `type_known` and randomizes decorators.
    - Set `reduced_mask=False` behavior if your `mask_x` must stay `(N,3)`.
 2. **Register it** in `sc_dict` at the bottom of `sc_utils.py`:
    ```python
    sc_dict = {..., 'myt': SC_MyTube}
    ```
 3. **Add an atom-count distribution** in [`script/sc_natm.py`](../../script/sc_natm.py) — add a `'myt'` key to `natm_dist_sc` (or it falls back to the dataset-level distribution in `SampleDataset`).
-4. **If it needs DB/parameter overrides**, add a branch in `SampleDataset.process()` ([gen_utils.py](../../script/gen_utils.py)) mirroring the `alx`/`ntb`/`cnt` cases that build `extra_kwargs`.
+4. **If it needs DB/parameter overrides**, add a branch in `SampleDataset.process()` ([gen_utils.py](../../script/gen_utils.py)) mirroring the `shl` case that builds `extra_kwargs`.
 5. **Test it:** set `sc_list=['myt']` in `gen_mul.py` and run `python gen_mul.py` (this is the documented manual-test workflow — there is no test suite).
 
 ## Import & path conventions
@@ -34,10 +34,10 @@ The `SC_*` classes in [`script/sc_utils.py`](../../script/sc_utils.py) follow a 
 Recreate: `ln -s ntgent scigen`. Check first when *anything* fails to import. → [module-dependencies.md](../architecture/module-dependencies.md).
 
 ### 2. carbon_24 flattens all species to carbon
-`SampleDataset.generate_dataset()` sets `data.atom_types = [6]*num_atom` when `dataset == 'carbon_24'` ([gen_utils.py](../../script/gen_utils.py), the `is_carbon` branch). This is correct for CNTs but **destroys multi-element `alx` templates**. **Rule:** run `alx` with a general dataset (`mp_20`/`uniform`), run `cnt` with `carbon_24`. → [known-discrepancies.md](../known-discrepancies.md).
+`SampleDataset.generate_dataset()` sets `data.atom_types = [6]*num_atom` when `dataset == 'carbon_24'` ([gen_utils.py](../../script/gen_utils.py), the `is_carbon` branch). That forces all-carbon tubes and **overrides the free species generation `shl` otherwise does**. **Rule:** for multi-element tubes run `shl` with a general dataset (`mp_20`/`uniform`); only use `carbon_24` when you specifically want carbon. → [known-discrepancies.md](../known-discrepancies.md).
 
 ### 3. `MAX_NATM` (build) vs `natm_range` (runtime) mismatch
-`build_templates.py` caches structures up to `MAX_NATM = 64`, but generation filters tighter by `natm_range` (e.g. 24 for carbon_24). `nanotube_template_from_db` further caps `N ≤ natm_max - 1` to leave room for ≥1 decorator. If no template fits, `alx` silently falls back to parametric `ntb`. So a too-small `natm_range` can mean you never actually use real templates. → [nanotube-template-db.md](../components/nanotube-template-db.md).
+`build_templates.py` caches structures up to `MAX_NATM = 64`, but generation filters tighter by `natm_range`. `nanotube_template_from_db` further caps `N ≤ natm_max - 1`. If no template fits, `shl` silently falls back to the private synthetic ring (`_SC_NanotubeFallback`). So a too-small `natm_range` can mean you never actually use real templates. → [nanotube-template-db.md](../components/nanotube-template-db.md).
 
 ### 4. `sample_scigen` is monkey-patched, not a method
 It's a module-level function attached at runtime: `model.sample_scigen = sample_scigen.__get__(model)` (in `generation.py`). If you call generation outside that script, you must patch it yourself. → [diffusion-model.md](../components/diffusion-model.md).

@@ -10,9 +10,9 @@ alexandria_1d_nanotubes.pkl                         (raw ASE structures)
         │  build_templates.py  (run once)
         ▼
 nanotube_templates.npz                              (CSR arrays, mmap-friendly)
-        │  _NanotubeTemplateDB.sample()   [only for sc='alx']
+        │  _NanotubeTemplateDB.sample()   [only for sc='shl']
         ▼
-SC_* object  ── frac_known, atom_numbers_known, cell, num_known
+SC_* object  ── cell, radial band [r_min, r_max]  (num_known=0 for shl)
         │  SampleDataset.process() + .generate_dataset()
         ▼
 PyG `Data`  ── frac_coords_known, lattice_known, atom_types_known,
@@ -30,18 +30,17 @@ eval_gen_<label>.pt   ── frac_coords, atom_types, lengths, angles,
 
 ## Stage by stage
 
-### 1. Raw data → template cache (one-time, `alx` only)
+### 1. Raw data → template cache (one-time, `shl` only)
 `data/alx_1D/alexandria_1d_nanotubes.pkl` (~7002 ASE `Atoms`, multi-element, multi-element compounds) is compressed by [`build_templates.py`](../../data/alx_1D/build_templates.py) into `nanotube_templates.npz`: CSR-style flat arrays (`numbers`, `frac_coords`, `cells`, `splits`, `natoms`) for every structure with ≤ `MAX_NATM` (=64) atoms and a non-degenerate cell. No ASE needed at runtime. → [components/nanotube-template-db.md](../components/nanotube-template-db.md).
 
 ### 2. Template → known skeleton (`SC_*` object)
 [`SampleDataset.process()`](../../script/gen_utils.py) picks a constraint type from `sc_list` for each sample and instantiates the matching class from `sc_dict`:
-- `alx`: calls `nanotube_template_from_db(natm_min, natm_max)` → a real `{frac_known, atom_numbers_known, cell}`, fed to `SC_DBTemplate`. If nothing fits the atom-count range, it **falls back to the parametric `SC_Nanotube`** (`ntb`).
-- `ntb` / `cnt`: synthesize a ring / rolled-graphene wall from parameters.
+- `shl`: calls `nanotube_template_from_db(natm_min, natm_max)` → a real `{frac_known, atom_numbers_known, cell}`, but `SC_DBShell` keeps only the `cell` and **discards the atoms** (`num_known=0`); `gen_utils` measures the radial band `[r_min, r_max]` from the template's atoms. If nothing fits the atom-count range, it **falls back to the private synthetic ring** `_SC_NanotubeFallback`.
 - `van`: a single dummy atom, no constraint.
 
-Each `SC_*` object exposes `frac_known`, `num_known`, `cell`, and — after `frac_coords_all()` / `atm_types_all()` — the full `frac_coords`, `atom_types`, and the masks `mask_x`, `mask_t`, `mask_l`. → [components/structural-constraints.md](../components/structural-constraints.md).
+Each `SC_*` object exposes `cell` and — after `frac_coords_all()` / `atm_types_all()` — the full `frac_coords`, `atom_types`, and the masks `mask_x`, `mask_t`, `mask_l` (all-zero for `shl`, since it pins no atoms). → [components/structural-constraints.md](../components/structural-constraints.md).
 
-**The number of atoms** (`num_atom`) is sampled from an empirical per-dataset / per-constraint distribution (`sc_natm.natm_dist`), truncated so `num_known < num_atom ≤ natm_max`. The `num_atom - num_known` extra atoms are the "unknown" atoms the model will generate.
+**The number of atoms** (`num_atom`) for `shl` is the drawn tube's real `nsites`; otherwise it is sampled from an empirical per-dataset distribution (`sc_natm.natm_dist`), truncated so `num_known < num_atom ≤ natm_max`.
 
 ### 3. Skeleton → conditioning batch (PyG `Data`)
 [`SampleDataset.generate_dataset()`](../../script/gen_utils.py) wraps each sample into a `torch_geometric.data.Data` carrying the *known* quantities plus the three masks. The masks are the heart of the constraint:
@@ -52,7 +51,7 @@ Each `SC_*` object exposes `frac_known`, `num_known`, `cell`, and — after `fra
 | `mask_t` | `(N,)` | which atom types are fixed |
 | `mask_l` | `(3, 3)` | which lattice-matrix entries are fixed |
 
-> **Carbon special case:** when `dataset == 'carbon_24'`, `generate_dataset()` sets `data.atom_types = [6]*num_atom`, flattening all species to carbon. Correct for CNTs, wrong for multi-element `alx` templates — see [known-discrepancies.md](../known-discrepancies.md) and [usage/extending.md](../usage/extending.md).
+> **Carbon special case:** when `dataset == 'carbon_24'`, `generate_dataset()` sets `data.atom_types = [6]*num_atom`, flattening all species to carbon. Fine if you specifically want all-carbon tubes, but it overrides the free species generation that `shl` otherwise does — use a general dataset (`mp_20`/`uniform`) for multi-element tubes. See [known-discrepancies.md](../known-discrepancies.md) and [usage/extending.md](../usage/extending.md).
 
 ### 4. Batch → structures (constrained reverse diffusion)
 [`generation.py`](../../script/generation.py) loads the trained model, monkey-patches `model.sample_scigen`, and iterates the `SampleDataset` loader. For each batch, `sample_scigen` runs reverse diffusion where — at **every** timestep — the known quantities are re-imposed via the masks:

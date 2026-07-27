@@ -10,24 +10,22 @@ Two ways to generate:
 - **Notebook route** (friendliest) — `../comp_models/NTGEN_generation/*.ipynb`. Colab-oriented; handles checkpoint download. ⚠ these assume an older `NTGEN-edit` folder name — see [known-discrepancies.md](../known-discrepancies.md) §3.
 - **CLI route** — edit `gen_mul.py` and run it, or call `script/generation.py` directly. Documented below.
 
-## 1. Build the template cache (once, for `alx`)
+## 1. Build the template cache (once, for `shl`)
 ```bash
 python data/alx_1D/build_templates.py
 ```
-→ produces `data/alx_1D/nanotube_templates.npz`. Skip if you're only doing `cnt`/`ntb`/`van`.
+→ produces `data/alx_1D/nanotube_templates.npz`. Skip if you're only doing `van`.
 
 ## 2. (Optional) Train a diffusion model
 Only needed if you don't use the pretrained `models/mp_20/` checkpoint.
 ```bash
 # general (multi-element) model:
 python scigen/run.py data=mp_20 model=diffusion_w_type expname=<name>
-# carbon-native (for CNTs) — see RETRAIN_CARBON.md:
-python scigen/run.py data=carbon_24 model=diffusion_w_type expname=cnt_carbon24
-# nanotube-native (for alx; fixes the mp_20-is-OOD decoration problem) — see RETRAIN_ALX.md:
+# nanotube-native (for shl; fixes the mp_20-is-OOD generation problem) — see RETRAIN_ALX.md:
 #   first: python data/alx_1D/build_train_csv.py   (pkl → train/val/test.csv, needs pymatgen)
 python scigen/run.py data=alx_1d model=diffusion_w_type expname=alx_1d
 # smoke test (resolve config, no training):
-python scigen/run.py data=carbon_24 model=diffusion_w_type expname=smoke --cfg job
+python scigen/run.py data=mp_20 model=diffusion_w_type expname=smoke --cfg job
 ```
 > Always pass both `data=` and `model=diffusion_w_type` — the config defaults (`data: default`, `model: diffusion`) are not what you want. See [configuration.md](../components/configuration.md).
 
@@ -39,18 +37,18 @@ python scigen/run.py data=carbon_24 model=diffusion_w_type expname=smoke --cfg j
 ```bash
 python gen_mul.py
 ```
-Key params: `dataset` (`'carbon_24'` → all-carbon CNTs; `'mp_20'` → general tubes), `sc_list` (e.g. `['cnt']`, `['ntb']`, `['alx']`, `['van']`), `atom_list` (known species, e.g. `['C']` or `['Mn','Fe']`), `batch_size`, `num_batches_to_samples`, `frac_z`, `sc_natm_range`. It loops `sc_list × num_run` and shells out to `generation.py`.
+Key params: `dataset` (`'mp_20'` → general multi-element tubes; `'carbon_24'` → all-carbon tubes), `sc_list` (e.g. `['shl']`, `['van']`), `atom_list` (known species used for bond-length sampling, e.g. `['Mn','Fe']`), `batch_size`, `num_batches_to_samples`, `frac_z`, `sc_natm_range`. It loops `sc_list × num_run` and shells out to `generation.py`.
 
 **Direct CLI** (equivalent single run):
 ```bash
 python script/generation.py \
   --model_path models/mp_20 --dataset mp_20 \
-  --sc alx --natm_range 20 24 --known_species Mn Fe \
+  --sc shl --natm_range 24 64 \
   --frac_z 0.5 --label myrun [--save_traj True]
 ```
 → writes `models/mp_20/eval_gen_myrun.pt` (the [output contract](../components/generation-scripts.md)).
 
-> **Constraint ↔ dataset pairing:** `cnt` → `carbon_24`; `alx` (multi-element templates) → a **general** dataset (`mp_20`/`uniform`), never `carbon_24` (it flattens species to carbon). See [extending.md](extending.md) and [known-discrepancies.md](../known-discrepancies.md).
+> **Constraint ↔ dataset pairing:** `shl` generates every atom's species, so pair it with a **general** dataset (`mp_20`/`uniform`); use `carbon_24` only when you specifically want all-carbon tubes (it flattens species to carbon). See [extending.md](extending.md) and [known-discrepancies.md](../known-discrepancies.md).
 
 ## 4. Export CIF files
 ```bash
@@ -85,7 +83,7 @@ For a quick, in-memory sanity check before exporting anything, use the generatio
 
 | Goal | Command |
 |---|---|
-| Build `alx` templates | `python data/alx_1D/build_templates.py` |
+| Build `shl` templates | `python data/alx_1D/build_templates.py` |
 | Train | `python scigen/run.py data=mp_20 model=diffusion_w_type expname=X` |
 | Generate (batch) | edit + `python gen_mul.py` |
 | Generate (one) | `python script/generation.py --sc … --label X …` |
