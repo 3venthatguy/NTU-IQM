@@ -12,11 +12,21 @@ Everything below is scaffolded in this repo; only the data-prep and the training
 (GPU, hours–days) are left, and both must run on a machine with `pymatgen` +
 `torch_geometric` (neither is available in the local analysis env).
 
+> **⚠️ Stale (2026-07-28):** `data/nano_1D/build_train_csv.py` and the legacy
+> `alexandria_1d_nanotubes.pkl` were **removed** during the data-dir cleanup, and the
+> template folder was renamed `alx_1D` → `nano_1D`. The current sources are
+> `stage0_survivors_structures.pkl` (synthetic) + `alexandria_direct_1d.json` (real).
+> To retrain you must **recreate `build_train_csv.py`** to emit `{train,val,test}.csv`
+> from those sources (reuse `load_sources.py`), and pick `max_atoms` to match the
+> intended cap (the template cache now uses 128, not 64). Steps below are otherwise
+> accurate but reference the removed script.
+
 ## Already scaffolded
 
-- `data/alx_1D/build_train_csv.py` — converts `alexandria_1d_nanotubes.pkl` →
-  `data/alx_1D/{train,val,test}.csv` (columns `material_id, pretty_formula,
-  energy_per_atom, cif`), reusing the ase-optional loader from `build_templates.py`.
+- `data/nano_1D/build_train_csv.py` — *(REMOVED — recreate; see the note above)*
+  converts the source structures → `data/nano_1D/{train,val,test}.csv` (columns
+  `material_id, pretty_formula, energy_per_atom, cif`), reusing the ase-optional
+  loaders from `load_sources.py` / `build_templates.py`.
 - `conf/data/alx_1d.yaml` — hydra data config (`prop: energy_per_atom`,
   `max_atoms: 64`, targets `scigen.pl_data.*`), mirroring `conf/data/carbon_24.yaml`.
 - `scigen -> ntgent` symlink — required for `import scigen` / `python scigen/run.py`.
@@ -26,10 +36,10 @@ Everything below is scaffolded in this repo; only the data-prep and the training
 
 ```bash
 cd NTGENS
-python data/alx_1D/build_train_csv.py
+python data/nano_1D/build_train_csv.py
 ```
 
-Produces `data/alx_1D/{train,val,test}.csv` (80/10/10 split of structures with
+Produces `data/nano_1D/{train,val,test}.csv` (80/10/10 split of structures with
 1–64 atoms). Notes:
 - The generative CSPDiffusion trains on **geometry**, not the property; the
   `energy_per_atom` column is a best-effort/placeholder value (the Alexandria pickle
@@ -56,7 +66,7 @@ python scigen/run.py data=alx_1d model=diffusion_w_type expname=alx_1d
 - `model=diffusion_w_type` selects `CSPDiffusion` with atom-type diffusion
   (`conf/model/diffusion_w_type.yaml`; costs: coord 1.0, lattice 1.0, type 20.0).
 - First run preprocesses every CIF (CrystalNN graphs) and caches
-  `data/alx_1D/{train,val,test}_ori.pt`; later runs reuse the cache.
+  `data/nano_1D/{train,val,test}_ori.pt`; later runs reuse the cache.
 - Resume by rerunning the same command — the newest `epoch=*.ckpt` is auto-picked.
 
 ## Step 4 — point the notebook at the new checkpoint
@@ -74,5 +84,5 @@ sensible decoration rather than a mp_20 bulk-crystal blob.
 python scigen/run.py data=alx_1d model=diffusion_w_type expname=smoke --cfg job
 ```
 
-prints the fully-resolved config; verify `data.root_path` ends in `data/alx_1D` and
+prints the fully-resolved config; verify `data.root_path` ends in `data/nano_1D` and
 `model._target_` is `scigen.pl_modules.diffusion_w_type.CSPDiffusion`.

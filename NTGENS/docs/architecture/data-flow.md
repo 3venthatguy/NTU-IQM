@@ -6,8 +6,8 @@
 ## The pipeline at a glance
 
 ```
-alexandria_1d_nanotubes.pkl                         (raw ASE structures)
-        │  build_templates.py  (run once)
+stage0_survivors.pkl (synthetic) + alexandria_direct_1d.json (real)   (raw sources)
+        │  build_templates.py  (reduce → quality-filter → merge; run once)
         ▼
 nanotube_templates.npz                              (CSR arrays, mmap-friendly)
         │  _NanotubeTemplateDB.sample()   [only for sc='shl']
@@ -31,7 +31,7 @@ eval_gen_<label>.pt   ── frac_coords, atom_types, lengths, angles,
 ## Stage by stage
 
 ### 1. Raw data → template cache (one-time, `shl` only)
-`data/alx_1D/alexandria_1d_nanotubes.pkl` (~7002 ASE `Atoms`, multi-element, multi-element compounds) is compressed by [`build_templates.py`](../../data/alx_1D/build_templates.py) into `nanotube_templates.npz`: CSR-style flat arrays (`numbers`, `frac_coords`, `cells`, `splits`, `natoms`) for every structure with ≤ `MAX_NATM` (=64) atoms and a non-degenerate cell. No ASE needed at runtime. → [components/nanotube-template-db.md](../components/nanotube-template-db.md).
+Two sources — `stage0_survivors_structures.pkl` (synthetic) and `alexandria_direct_1d.json` (real, DFT) — are processed by [`build_templates.py`](../../data/nano_1D/build_templates.py): each tube is reduced to its simplest periodic cell (`reduce_templates`), quality-filtered (`filter_templates` — 5 gates: contacts, hollow core, radius ≤ 8 Å, atom count ≤ `MAX_NATM`=128, peaked ρ), deduped across sources, and packed into `nanotube_templates.npz`: CSR-style flat arrays (`numbers`, `frac_coords`, `cells`, `splits`, `natoms`, `source`). No ASE needed at runtime. → [components/nanotube-template-db.md](../components/nanotube-template-db.md).
 
 ### 2. Template → known skeleton (`SC_*` object)
 [`SampleDataset.process()`](../../script/gen_utils.py) picks a constraint type from `sc_list` for each sample and instantiates the matching class from `sc_dict`:

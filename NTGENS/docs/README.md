@@ -43,7 +43,7 @@ docs/
 │   ├── diffusion-model.md         pl_modules/ — CSPDiffusion, sample_scigen, cspnet
 │   ├── structural-constraints.md  script/sc_utils.py — the SC_* class hierarchy
 │   ├── generation-scripts.md      script/ CLI layer (generation, save_cif, screen, metrics)
-│   ├── nanotube-template-db.md    data/alx_1D/ — build_templates + npz cache + DB loader
+│   ├── nanotube-template-db.md    data/nano_1D/ — build_templates + npz cache + DB loader
 │   ├── gnn-screening.md           gnn_eval/ classifier sub-project
 │   └── configuration.md           conf/ Hydra tree, .env, config_scigen.py
 ├── technical-foundations.md       Diffusion, wrapped-normal, inpainting, nanotube geometry

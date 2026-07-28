@@ -17,20 +17,20 @@ with open('./data/kde_bond.pkl', 'rb') as file:
 
 # --- 1D nanotube database (Pathway 3): real structures as geometry templates ---
 # The Alexandria 1D-nanotube set (7002 ASE structures) is preprocessed once into a
-# compact CSR-style npz by data/alx_1D/build_templates.py (no ase needed at run
+# compact CSR-style npz by data/nano_1D/build_templates.py (no ase needed at run
 # time). We mmap it here and serve one real structure per draw (sc='shl'): its cell
 # defines the tube frame + radial band for SC_DBShell (no atoms are pinned).
 # Templates are indexed by atom count for O(1) natm_range filtering.
 
 class _NanotubeTemplateDB:
     """Lazy, mmap-backed store of database nanotube templates, bucketed by natoms."""
-    def __init__(self, path='./data/alx_1D/nanotube_templates.npz'):
+    def __init__(self, path='./data/nano_1D/nanotube_templates.npz'):
         self.ok = False
         try:
             z = np.load(path, mmap_mode='r')            # arrays stay on disk
         except FileNotFoundError:
             print(f'Warning: {path} not found; sc="shl" falls back to the synthetic '
-                  'ring geometry. Run data/alx_1D/build_templates.py to create it.')
+                  'ring geometry. Run data/nano_1D/build_templates.py to create it.')
             return
         self._numbers = z['numbers']                    # (sum N,)   int16
         self._frac = z['frac_coords']                   # (sum N, 3) float32
@@ -76,6 +76,11 @@ class _NanotubeTemplateDB:
             'frac_known': np.asarray(self._frac[lo:hi]),           # (N, 3)
             'atom_numbers_known': np.asarray(self._numbers[lo:hi]),  # (N,)
             'cell': np.asarray(self._cells[idx]),                  # (3, 3)
+            # Provenance of the drawn template (underscore-prefixed: consumed by
+            # SampleDataset.process and popped off before SC_DBShell(**kwargs), so
+            # these never reach the constraint constructor). -1 source = untagged.
+            '_template_index': int(idx),
+            '_template_source': int(self._source[idx]) if self._source is not None else -1,
         }
 
 NANOTUBE_DB = _NanotubeTemplateDB()
@@ -218,11 +223,16 @@ class SampleDataset(Dataset):
         # v2: per-template radial log-density force table for density guidance;
         # None disables guidance for that sample.
         self.tube_density_list = []
+        # Provenance of the drawn template per sample (-1 = none/untagged): the
+        # nanotube_templates.npz row index and its source code (0=synthetic, 1=real).
+        self.template_index_list = []
+        self.template_source_list = []
         # self.get_num_atoms()
         for i, (sc, type_known, bond_len, frac_z_known) in enumerate(zip(self.sc_list, self.type_known_list, self.bond_len_list, self.frac_z_known_list)):
             sc_obj = sc_dict[sc]
             # 'shl' takes real tube geometry drawn from the DB; {} for 'van' leaves
             # its signature unchanged.
+            tmpl_idx, tmpl_src = -1, -1               # template provenance (none by default)
             if sc == 'shl':
                 # Real 1D-nanotube GEOMETRY only: the template's cell defines the
                 # tube frame + radial band, but NO atoms are pinned (num_known=0);
@@ -230,6 +240,9 @@ class SampleDataset(Dataset):
                 # template fits natm_range, fall back to the private synthetic ring.
                 extra_kwargs = nanotube_template_from_db(
                     self.natm_min, self.natm_max, source_filter=self.template_source)
+                # Pop provenance before it reaches the SC_DBShell constructor.
+                tmpl_idx = int(extra_kwargs.pop('_template_index', -1))
+                tmpl_src = int(extra_kwargs.pop('_template_source', -1))
                 if not extra_kwargs:
                     sc_obj = _SC_NanotubeFallback
             else:
@@ -291,6 +304,8 @@ class SampleDataset(Dataset):
                 self.tube_bounds_list.append(None)
                 self.tube_density_list.append(None)
 
+            self.template_index_list.append(tmpl_idx)
+            self.template_source_list.append(tmpl_src)
             self.num_known_list.append(num_known)
             self.num_atom_list.append(num_atom)
             self.frac_coords_list.append(sc_material.frac_coords)
@@ -363,6 +378,10 @@ class SampleDataset(Dataset):
                 dens_grid_lo=torch.tensor([dens_grid_lo_], dtype=torch.float),
                 dens_grid_dr=torch.tensor([dens_grid_dr_], dtype=torch.float),
                 dens_force=dens_force_.unsqueeze(0),
+                # Provenance: which nanotube_templates.npz row this candidate drew,
+                # and its source (0=synthetic, 1=real, -1=none/fallback/van).
+                template_index=torch.tensor([self.template_index_list[index]], dtype=torch.long),
+                template_source=torch.tensor([self.template_source_list[index]], dtype=torch.long),
             )
             if self.is_carbon:
                 data.atom_types = torch.LongTensor([6] * num_atom)

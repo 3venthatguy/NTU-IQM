@@ -19,7 +19,7 @@ The output is a set of structures saved as a `.pt` tensor bundle, convertible to
 |---|---|---|
 | **DiffCSP** | The base crystal-structure diffusion model: joint diffusion over lattice, fractional coordinates, and atom types; the CSPNet decoder. | The `ntgent/` package (imported as `scigen`) is a DiffCSP derivative. A pristine copy sits in the sibling `../comp_models/DiffCSP-main/`. |
 | **SCIGEN** | *Structural Constraint Integration in the GENerative model*: the `sample_scigen` inpainting sampler and the `SC_*` constraint classes that pin known atoms into 2D lattice motifs (honeycomb, kagome, …). Published in *Nature Materials* 2025 (arXiv:2407.04557). | `ntgent/pl_modules/diffusion_w_type.py::sample_scigen` + `script/sc_utils.py`. |
-| **NTGEN** (this repo) | Specialized SCIGEN to **nanotubes only**: replaced the 2D-lattice constraints with 1D tube constraints, and added a real-structure template database (Alexandria 1D). | `script/sc_utils.py` `sc_dict`, `data/alx_1D/`. |
+| **NTGEN** (this repo) | Specialized SCIGEN to **nanotubes only**: replaced the 2D-lattice constraints with 1D tube constraints, and added a real-structure template database (Alexandria 1D). | `script/sc_utils.py` `sc_dict`, `data/nano_1D/`. |
 
 ## The four constraints (`sc_dict`)
 

@@ -1,4 +1,4 @@
-root_path: ${oc.env:PROJECT_ROOT}/data/alx_1D
+root_path: ${oc.env:PROJECT_ROOT}/data/nano_1D
 prop: energy_per_atom
 num_targets: 1
 niggli: true

@@ -52,7 +52,7 @@ These rely on `script/` being on `sys.path` — which happens because the script
 ## Dependency direction (who imports whom)
 
 ```
-data/alx_1D/build_templates.py        (standalone: numpy, optional ase)
+data/nano_1D/build_templates.py        (standalone: numpy, optional ase)
         │  produces nanotube_templates.npz
         ▼
 script/gen_utils.py  ── _NanotubeTemplateDB, SampleDataset
@@ -82,7 +82,7 @@ ntgent/common/data_utils.py            (geometry / graph primitives)
 - `script/generation.py` → `scigen.pl_modules.diffusion_w_type.sample_scigen` + local `eval_utils`, `gen_utils`.
 - `script/eval_screen.py` → `config_scigen` (user file) + `gnn_eval.utils.data` / `gnn_eval.utils.record` + local `eval_funcs`.
 - `gnn_eval/train_*.py` → `gnn_eval/utils/*` (relative `from utils.data import …`) + `config_eval` (user file).
-- `data/alx_1D/build_templates.py` is **standalone** — only `numpy` and optional `ase`; it feeds `gen_utils._NanotubeTemplateDB`.
+- `data/nano_1D/build_templates.py` is **standalone** — only `numpy` and optional `ase`; it feeds `gen_utils._NanotubeTemplateDB`.
 
 ## Training vs. runtime dependency footprint
 

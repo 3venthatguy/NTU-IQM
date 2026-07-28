@@ -1,0 +1,17 @@
+{
+  "_comment": "Google Drive sources for the 1D-nanotube pinning database. gdrive_fetch.py reads this; build_templates.py then merges them into nanotube_templates.npz. Each files[] entry has a local 'name' and the Drive 'id' (the token in a share link https://drive.google.com/file/d/<id>/view). Optional 'md5' triggers integrity re-download. Set 'folder_url' instead to mirror a whole shared folder (gdown backend). 'dest_dir' defaults to this data/nano_1D folder. NOTE: stage0 is the large synthetic set (~1 GB); alexandria_direct_1d.json is the real (DFT) set. The legacy alexandria_1d_nanotubes.pkl was retired in favor of alexandria_direct_1d.json.",
+  "dest_dir": null,
+  "folder_url": null,
+  "files": [
+    {
+      "name": "stage0_survivors_structures.pkl",
+      "id": "REPLACE_WITH_DRIVE_FILE_ID",
+      "md5": null
+    },
+    {
+      "name": "alexandria_direct_1d.json",
+      "id": "REPLACE_WITH_DRIVE_FILE_ID",
+      "md5": null
+    }
+  ]
+}

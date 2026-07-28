@@ -25,7 +25,7 @@ NTGENS is organized as a stack. Higher layers depend on lower ones; the constrai
 └───────────────┬───────────────────────────────┬──────────────────────┘
                 │ import scigen.*                │ reads templates
 ┌───────────────▼───────────────────┐  ┌─────────▼──────────────────────┐
-│  CORE ML PACKAGE  (ntgent/, aka   │  │  TEMPLATE DATA  (data/alx_1D/) │
+│  CORE ML PACKAGE  (ntgent/, aka   │  │  TEMPLATE DATA  (data/nano_1D/) │
 │  `scigen` via symlink)            │  │   build_templates.py (ETL)     │
 │   pl_modules/  diffusion, cspnet, │  │   → nanotube_templates.npz     │
 │                gnn, energy, model │  │   consumed by gen_utils DB     │
@@ -59,7 +59,7 @@ The DiffCSP-derived model and its data plumbing. Knows nothing about nanotubes �
 ### Script layer (`script/`)
 The nanotube-specific business logic layered on top of the model: define the known skeleton (`sc_utils.py`), assemble it into a batch of pinned conditioning data (`gen_utils.py`), run the sampler (`generation.py`), and post-process. → [components/structural-constraints.md](../components/structural-constraints.md), [components/generation-scripts.md](../components/generation-scripts.md).
 
-### Template data (`data/alx_1D/`)
+### Template data (`data/nano_1D/`)
 The real-structure database feature. A one-time ETL (`build_templates.py`) compresses ~7000 ASE nanotube structures into an mmap-friendly `.npz`; at runtime the `shl` constraint samples real tube geometries from it. → [components/nanotube-template-db.md](../components/nanotube-template-db.md).
 
 ### Post-processing & screening

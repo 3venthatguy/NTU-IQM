@@ -56,7 +56,7 @@ For **nanotube-native** generation (the recommended checkpoint for `shl`) you ne
 
 ## 6. Build the nanotube template cache (only for `sc='shl'`)
 ```bash
-python data/alx_1D/build_templates.py     # pkl → nanotube_templates.npz (run once)
+python data/nano_1D/build_templates.py     # pkl → nanotube_templates.npz (run once)
 ```
 If `nanotube_templates.npz` is absent at runtime, `sc='shl'` prints a warning and falls back to the private synthetic ring geometry. Detail: [nanotube-template-db.md](../components/nanotube-template-db.md).
 

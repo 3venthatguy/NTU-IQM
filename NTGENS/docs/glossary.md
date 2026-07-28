@@ -17,7 +17,7 @@
 | **`mask_x` / `mask_t` / `mask_l`** | Per-sample masks marking fixed fractional coords `(N,3)`, atom types `(N,)`, lattice entries `(3,3)`. 1 = pinned. |
 | **wrapped normal** | A normal distribution on a periodic domain; used for fractional-coordinate diffusion (`diff_utils.py`). |
 | **Pathway 3** | The strategy of grounding generation in a **real** database structure (vs. synthesizing one). Implemented by `SC_DBShell` / the Alexandria DB — `shl` uses the real tube's geometry as a radial shell. |
-| **Alexandria 1D DB** | Source of ~7002 real 1D-nanotube structures (`data/alx_1D/`), multi-element compounds. |
+| **Alexandria 1D DB** | Real DFT 1D-nanotube source `alexandria_direct_1d.json` (`data/nano_1D/`); merged with the synthetic `stage0_survivors` set and quality-filtered into `nanotube_templates.npz`. |
 | **template cache (`.npz`)** | `nanotube_templates.npz` — CSR-packed, mmap-friendly, ASE-free cache built by `build_templates.py`. |
 | **CSR arrays** | Compressed-Sparse-Row packing: flat concatenated arrays + a `splits` row-pointer to slice per structure. |
 | **KDE bond length** | Kernel-density-estimated bond length per element (`data/kde_bond.pkl`), sampled at generation time. |

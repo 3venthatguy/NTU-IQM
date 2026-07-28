@@ -12,9 +12,9 @@ Two ways to generate:
 
 ## 1. Build the template cache (once, for `shl`)
 ```bash
-python data/alx_1D/build_templates.py
+python data/nano_1D/build_templates.py
 ```
-→ produces `data/alx_1D/nanotube_templates.npz`. Skip if you're only doing `van`.
+→ produces `data/nano_1D/nanotube_templates.npz`. Skip if you're only doing `van`.
 
 ## 2. (Optional) Train a diffusion model
 Only needed if you don't use the pretrained `models/mp_20/` checkpoint.
@@ -22,7 +22,7 @@ Only needed if you don't use the pretrained `models/mp_20/` checkpoint.
 # general (multi-element) model:
 python scigen/run.py data=mp_20 model=diffusion_w_type expname=<name>
 # nanotube-native (for shl; fixes the mp_20-is-OOD generation problem) — see RETRAIN_ALX.md:
-#   first: python data/alx_1D/build_train_csv.py   (pkl → train/val/test.csv, needs pymatgen)
+#   first: build train/val/test.csv from the sources (build_train_csv.py was removed — recreate; see RETRAIN_ALX.md)
 python scigen/run.py data=alx_1d model=diffusion_w_type expname=alx_1d
 # smoke test (resolve config, no training):
 python scigen/run.py data=mp_20 model=diffusion_w_type expname=smoke --cfg job
@@ -83,7 +83,7 @@ For a quick, in-memory sanity check before exporting anything, use the generatio
 
 | Goal | Command |
 |---|---|
-| Build `shl` templates | `python data/alx_1D/build_templates.py` |
+| Build `shl` templates | `python data/nano_1D/build_templates.py` |
 | Train | `python scigen/run.py data=mp_20 model=diffusion_w_type expname=X` |
 | Generate (batch) | edit + `python gen_mul.py` |
 | Generate (one) | `python script/generation.py --sc … --label X …` |
