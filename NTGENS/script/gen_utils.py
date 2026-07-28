@@ -212,7 +212,7 @@ class SampleDataset(Dataset):
         self.atom_types_list = []
         self.lattice_list = []
         self.mask_x_list, self.mask_t_list, self.mask_l_list =  [], [], []
-        # Per-template cylindrical bounds for the radial envelope (sc='alx' real
+        # Per-template cylindrical bounds for the radial envelope (sc='shl' real
         # templates only); None disables the envelope for that sample.
         self.tube_bounds_list = []
         # v2: per-template radial log-density force table for density guidance;
@@ -313,7 +313,7 @@ class SampleDataset(Dataset):
             # Graph-level cylindrical-envelope metadata. Stored with a leading
             # batch dim of 1 so PyG concatenates them to (B, ...) exactly like
             # lattice_known; the sampler expands per-atom via batch.batch. When no
-            # real template was pinned, is_alx=0 and r_max is a large sentinel so
+            # real template was drawn, is_alx=0 and r_max is a large sentinel so
             # the radial pull is a no-op (r > r_max is never true).
             bounds = self.tube_bounds_list[index]
             if bounds is not None:
