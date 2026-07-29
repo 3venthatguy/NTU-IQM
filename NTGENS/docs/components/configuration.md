@@ -3,10 +3,65 @@
 > **Audience:** programmer. **Purpose:** every knob that parameterizes a run without editing model code.
 > ⬅ Back to [docs hub](../README.md) · Related: [core-package-ntgent.md](core-package-ntgent.md), [setup.md](../usage/setup.md)
 
-Three configuration mechanisms coexist:
+Four configuration mechanisms coexist:
 1. **Hydra `conf/`** — drives **training** (`scigen/run.py`).
 2. **`.env`** — supplies path env vars used throughout.
 3. **Editable Python config scripts** (`config_scigen.py`, `gnn_eval/config_eval.py`) — drive **generation/screening**.
+4. **Runtime model attributes** (`model.pin_cfg` / `cyl_cfg` / `dens_cfg` / `ang_cfg` / `geom_pin_cfg`) — set by `script/generation.py` from CLI flags (or by the notebook directly) and read by `sample_scigen`. A pretrained checkpoint's `self.hparams` are frozen, so guidance is configured here rather than in Hydra. Tabulated below.
+
+## Generation-time guidance knobs
+
+Every flag below is a `script/generation.py` CLI arg; the notebook `ntgen_generation.ipynb` exposes the same knobs as UPPER_CASE variables in its config cell. All apply to `sc='shl'` only — `van` and any graph without a real template (`is_alx=0`) are untouched. Mechanism: [technical-foundations.md](../technical-foundations.md) §5b.
+
+**Skeleton/lattice pinning ramp `ψ(t)`** → `model.pin_cfg`
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--pin_schedule` | `none` | `none` (binary) \| `linear` \| `sigmoid` |
+| `--pin_alpha` | `10.0` | sigmoid steepness |
+| `--pin_tmid` | `0.6` | sigmoid inflection, as a fraction of `T` |
+| `--pin_psi_start` | `0.0` | ψ at `t=T`. **Keep at 0** — see [known-discrepancies.md](../known-discrepancies.md) §8 |
+| `--pin_psi_end` | `1.0` | ψ at `t=0` |
+
+**Geometric-force ramp** (decouples the force gain from the mask) → `model.geom_pin_cfg`
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--geom_pin_schedule` | `same` | `same` reuses `--pin_schedule`; otherwise `none`/`linear`/`sigmoid` |
+| `--geom_psi_start` / `--geom_psi_end` | `0.0` / `1.0` | force gain at `t=T` / `t=0` |
+
+**Radial band + frame tracking** → `model.cyl_cfg`
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--cyl_masking` | `False` | confine atoms to `[r_min, r_max]` |
+| `--cyl_margin` | `0.1` | `r_hi = r_max · (1 + margin)` |
+| `--cyl_r_lo_pct` | `5.0` | inner band-edge percentile |
+| `--cyl_strength` | `1.0` | peak radial pull (× ψ) |
+| `--cyl_track_frame` | `True` | rebuild the frame from the **current** lattice each step — the fix for azimuthal clustering |
+| `--cyl_scale_lo` / `--cyl_scale_hi` | `0.25` / `4.0` | clamp `s_t` against the linear cell-scale ratio |
+| `--cyl_ang_min` | `0.05` | min `sin(angle)` between transverse rows before a cell counts as degenerate |
+
+**Radial density guidance** → `model.dens_cfg`
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--density_guidance` | `False` | step `r` up `d/dr log ρ(r)` toward the wall |
+| `--density_strength` | `0.05` | radial step scale (× ψ × `s_t`) |
+| `--bandwidth_scale` | `1.0` | KDE bandwidth = wall thickness; `<1` sharpens |
+| `--density_grid_size` | `96` | force-table resolution |
+
+**Angular dispersion** → `model.ang_cfg`
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--ang_spread` | `False` | reduce the circular resultant `R̄` (0 = spread, 1 = one arc) |
+| `--ang_strength` | `0.05` | max radians rotated per application (× ψ) |
+| `--ang_modes` | `1` | `1` = first moment; `2` also splits antipodal pairs |
+| `--ang_mode2_weight` | `0.25` | mode-2 weight when `--ang_modes ≥ 2` |
+| `--ang_mode2_floor` | `0.10` | mode-2 deadband — real tubes have genuine n-fold structure at `R̄₂ ≈ 0.10`, so do **not** drive it to 0 |
+| `--ang_min_atoms` | `3` | graphs with fewer valid atoms are skipped |
+| `--ang_max_dtheta` | `0.5` | hard cap on `|Δθ|` per application (rad) |
 
 ## Hydra `conf/`
 ```

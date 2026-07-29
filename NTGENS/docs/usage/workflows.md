@@ -48,6 +48,22 @@ python script/generation.py \
 ```
 → writes `models/mp_20/eval_gen_myrun.pt` (the [output contract](../components/generation-scripts.md)).
 
+**With the `shl` geometric guidance on** (what the notebook does by default):
+```bash
+python script/generation.py \
+  --model_path models/mp_20 --dataset mp_20 \
+  --sc shl --natm_range 4 128 --template_source real \
+  --pin_schedule sigmoid --pin_psi_start 0.0 \
+  --cyl_masking True --density_guidance True \
+  --cyl_track_frame True \
+  --label myrun --save_traj True
+```
+> `--cyl_track_frame True` (the default) rebuilds the tube frame from the current lattice each step. With it off, atoms bunch onto a **single arc** of the wall — the cell starts as ~1 Å noise while a frozen frame is measured in template Ångströms, and the radial terms are θ-invariant so the bias is never corrected.
+>
+> **Do not raise `--pin_psi_start`** to pin the lattice sooner: ψ also gates the geometric force strength, so it fires the full-strength band at the noise-scale cell. Use `--geom_pin_schedule` to ramp the forces separately. → [known-discrepancies.md](../known-discrepancies.md) §8.
+>
+> Full knob table: [configuration.md](../components/configuration.md#generation-time-guidance-knobs).
+
 > **Constraint ↔ dataset pairing:** `shl` generates every atom's species, so pair it with a **general** dataset (`mp_20`/`uniform`); use `carbon_24` only when you specifically want all-carbon tubes (it flattens species to carbon). See [extending.md](extending.md) and [known-discrepancies.md](../known-discrepancies.md).
 
 ## 4. Export CIF files

@@ -12,7 +12,7 @@ stage0_survivors.pkl (synthetic) + alexandria_direct_1d.json (real)   (raw sourc
 nanotube_templates.npz                              (CSR arrays, mmap-friendly)
         │  _NanotubeTemplateDB.sample()   [only for sc='shl']
         ▼
-SC_* object  ── cell, radial band [r_min, r_max]  (num_known=0 for shl)
+SC_* object  ── cell, radial band [r_min, r_max], frame + centroid_frac  (num_known=0 for shl)
         │  SampleDataset.process() + .generate_dataset()
         ▼
 PyG `Data`  ── frac_coords_known, lattice_known, atom_types_known,
@@ -35,7 +35,7 @@ Two sources — `stage0_survivors_structures.pkl` (synthetic) and `alexandria_di
 
 ### 2. Template → known skeleton (`SC_*` object)
 [`SampleDataset.process()`](../../script/gen_utils.py) picks a constraint type from `sc_list` for each sample and instantiates the matching class from `sc_dict`:
-- `shl`: calls `nanotube_template_from_db(natm_min, natm_max)` → a real `{frac_known, atom_numbers_known, cell}`, but `SC_DBShell` keeps only the `cell` and **discards the atoms** (`num_known=0`); `gen_utils` measures the radial band `[r_min, r_max]` from the template's atoms. If nothing fits the atom-count range, it **falls back to the private synthetic ring** `_SC_NanotubeFallback`.
+- `shl`: calls `nanotube_template_from_db(natm_min, natm_max)` → a real `{frac_known, atom_numbers_known, cell}`, but `SC_DBShell` keeps only the `cell` and **discards the atoms** (`num_known=0`); `gen_utils` measures the radial band `[r_min, r_max]` from the template's atoms, plus the cylindrical frame and the cross-section centroid in **both** Cartesian (`centroid`, valid only at `t=0`) and **fractional** (`centroid_frac`, lattice-independent) form. If nothing fits the atom-count range, it **falls back to the private synthetic ring** `_SC_NanotubeFallback`.
 - `van`: a single dummy atom, no constraint.
 
 Each `SC_*` object exposes `cell` and — after `frac_coords_all()` / `atm_types_all()` — the full `frac_coords`, `atom_types`, and the masks `mask_x`, `mask_t`, `mask_l` (all-zero for `shl`, since it pins no atoms). → [components/structural-constraints.md](../components/structural-constraints.md).
@@ -62,10 +62,12 @@ l_t = mask_l * l_0_known + (1 - mask_l) * l_unknown      # lattice
 t_t = mask_t * t_0_known + (1 - mask_t) * t_unknown      # types
 ```
 
-This is the **inpainting** protocol: the known skeleton is never allowed to drift; only the unknown atoms are denoised. → [components/diffusion-model.md](../components/diffusion-model.md), [technical-foundations.md](../technical-foundations.md).
+This is the **inpainting** protocol: the known skeleton is never allowed to drift; only the unknown atoms are denoised. The masks are scaled by a ramp `ψ(t)` (`pin_cfg`), so with a schedule set the skeleton fades in rather than being frozen from `t=T`.
+
+After each of the two update stages (corrector and predictor), `radial_envelope` applies the **geometric guidance** to `x_t` — never to `x_T`, which must stay a generic prior sample. It converts to Cartesian, rebuilds the tube frame from the **current** lattice `l_t` (`lattice_tube_frame`) and scales the band by `s_t` (`transverse_scale`), then applies the radial band, the density force, and optionally the angular-dispersion term, before converting back to fractional coords. Graphs with `is_alx=0` are gated out entirely — a zero frame would otherwise map all their atoms to the origin. The force gain uses `psi_geom`, which follows `pin_cfg` unless `geom_pin_cfg` is set. → [components/diffusion-model.md](../components/diffusion-model.md), [technical-foundations.md](../technical-foundations.md) §5b.
 
 ### 5. Structures → saved bundle
-`generation.py` concatenates outputs, converts lattice matrices to `(lengths, angles)`, and `torch.save`s a dict to `<model_path>/eval_gen_<label>.pt`. Key fields: `frac_coords`, `atom_types`, `lengths`, `angles`, `num_atoms`, `num_known`, and (if `--save_traj`) the full per-timestep trajectory tensors.
+`generation.py` concatenates outputs, converts lattice matrices to `(lengths, angles)`, and `torch.save`s a dict to `<model_path>/eval_gen_<label>.pt`. Key fields: `frac_coords`, `atom_types`, `lengths`, `angles`, `num_atoms`, `num_known`, the guidance configs (`pin_cfg`, `cyl_cfg`, `dens_cfg`, `ang_cfg`, `geom_pin_cfg`), and (if `--save_traj`) the full per-timestep trajectory tensors.
 
 ### 6. Bundle → deliverables
 The `.pt` bundle is the hand-off point for all downstream tools:

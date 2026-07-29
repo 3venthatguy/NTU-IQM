@@ -88,6 +88,11 @@ def main(args):
         'margin': args.cyl_margin,
         'r_lo_percentile': args.cyl_r_lo_pct,
         'max_strength': args.cyl_strength,
+        # v3: track the frame against the current lattice (see --cyl_track_frame).
+        'track_frame': args.cyl_track_frame,
+        'scale_lo': args.cyl_scale_lo,
+        'scale_hi': args.cyl_scale_hi,
+        'ang_min': args.cyl_ang_min,
     }
     # v2 radial density guidance (concentrate atoms onto the wall within the band).
     model.dens_cfg = {
@@ -96,9 +101,30 @@ def main(args):
         'bandwidth_scale': args.bandwidth_scale,
         'grid_size': args.density_grid_size,
     }
+    # v3 angular dispersion (spread atoms around the circumference).
+    _modes = max(1, int(args.ang_modes))
+    model.ang_cfg = {
+        'enabled': args.ang_spread,
+        'ang_strength': args.ang_strength,
+        'mode_weights': (1.0,) if _modes < 2 else (1.0, args.ang_mode2_weight),
+        'r_floors': (0.0,) if _modes < 2 else (0.0, args.ang_mode2_floor),
+        'min_atoms': args.ang_min_atoms,
+        'max_dtheta': args.ang_max_dtheta,
+    }
+    # Optional separate ramp for the geometric forces (None -> follow pin_cfg).
+    model.geom_pin_cfg = None if args.geom_pin_schedule == 'same' else {
+        'enabled': args.geom_pin_schedule != 'none',
+        'schedule': args.geom_pin_schedule,
+        'alpha': args.pin_alpha,
+        't_mid_frac': args.pin_tmid,
+        'psi_start': args.geom_psi_start,
+        'psi_end': args.geom_psi_end,
+    }
     print('pin_cfg:', model.pin_cfg)
     print('cyl_cfg:', model.cyl_cfg)
     print('dens_cfg:', model.dens_cfg)
+    print('ang_cfg:', model.ang_cfg)
+    print('geom_pin_cfg:', model.geom_pin_cfg)
     print('Evaluate the diffusion model.')
     c_vec_cons = {'scale': args.c_scale, 'vert': args.c_vert}
     # print('c_vec_cons: ', c_vec_cons)
@@ -155,6 +181,8 @@ def main(args):
         'pin_cfg': model.pin_cfg,
         'cyl_cfg': model.cyl_cfg,
         'dens_cfg': model.dens_cfg,
+        'ang_cfg': model.ang_cfg,
+        'geom_pin_cfg': model.geom_pin_cfg,
         'seed': seed,
         'time': run_time,
     }
@@ -206,5 +234,33 @@ if __name__ == '__main__':
     parser.add_argument('--density_strength', default=0.05, type=float, help="Density-guidance radial step scale (scaled by psi(t)).")
     parser.add_argument('--bandwidth_scale', default=1.0, type=float, help="KDE bandwidth multiplier = wall thickness (<1 sharpens).")
     parser.add_argument('--density_grid_size', default=96, type=int, help="Per-template density force-table resolution.")
+    # v3 frame tracking: rebuild the (r, theta, z) frame from the CURRENT lattice each
+    # step. The cell starts as noise (~1 A) and grows into the template cell, so a
+    # frame frozen in template Angstroms sits outside the early cell and collapses
+    # every atom onto one azimuth -- which the theta-invariant radial forces then lock in.
+    parser.add_argument('--cyl_track_frame', type=lambda x: x.lower() == 'true', default=True,
+                        help="Rebuild the tube frame from the current lattice each step (root-cause fix for azimuthal clustering).")
+    parser.add_argument('--cyl_scale_lo', default=0.25, type=float, help="Lower clamp on s_t relative to the linear cell-scale ratio.")
+    parser.add_argument('--cyl_scale_hi', default=4.0, type=float, help="Upper clamp on s_t relative to the linear cell-scale ratio.")
+    parser.add_argument('--cyl_ang_min', default=0.05, type=float, help="Min sin(angle) between transverse cell rows before a cell counts as degenerate.")
+    # v3 angular dispersion: the radial terms leave theta untouched, so nothing else
+    # ever spreads atoms around the circumference.
+    parser.add_argument('--ang_spread', type=lambda x: x.lower() == 'true', default=False,
+                        help="Rotate atoms about the tube axis to reduce the circular resultant (sc='shl').")
+    parser.add_argument('--ang_strength', default=0.05, type=float, help="Max radians of angular rotation per application (scaled by psi(t)).")
+    parser.add_argument('--ang_modes', default=1, type=int, help="Fourier modes driven to uniformity (1 = first moment only; 2 also splits antipodal pairs).")
+    parser.add_argument('--ang_mode2_weight', default=0.25, type=float, help="Weight of mode 2 when --ang_modes >= 2.")
+    parser.add_argument('--ang_mode2_floor', default=0.10, type=float, help="Mode-2 deadband: real templates sit at R2 ~ 0.10, so don't drive it to 0.")
+    parser.add_argument('--ang_min_atoms', default=3, type=int, help="Graphs with fewer valid atoms are left alone.")
+    parser.add_argument('--ang_max_dtheta', default=0.5, type=float, help="Hard cap on |dtheta| per application (radians).")
+    # Geometric-guidance ramp, decoupled from the skeleton/lattice pinning ramp.
+    parser.add_argument('--geom_pin_schedule', default='same',
+                        choices=['same', 'none', 'linear', 'sigmoid'],
+                        help="Schedule for the GEOMETRIC force gain ('same' -> reuse --pin_schedule). "
+                             "Decoupling lets the lattice be hard-pinned (--pin_psi_start 1.0) while the "
+                             "forces still ramp from 0 -- raising --pin_psi_start alone runs the "
+                             "full-strength band against a noise-scale cell and wrecks the structure.")
+    parser.add_argument('--geom_psi_start', default=0.0, type=float, help="Geometric force gain at t=T.")
+    parser.add_argument('--geom_psi_end', default=1.0, type=float, help="Geometric force gain at t=0.")
     args = parser.parse_args()
     main(args)

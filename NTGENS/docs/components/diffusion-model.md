@@ -58,8 +58,21 @@ The known atoms therefore **never drift** — the diffusion only fills in the un
 ### `cspnet.py` — the decoder
 The message-passing backbone used as the diffusion decoder (`conf/model/decoder/cspnet.yaml`). Defines `SinusoidsEmbedding` (Fourier positional embedding) and `CSPLayer` (combines node hidden state, edge-distance embedding, and the `3×3` lattice matrix into an equivariant-ish update), assembled into `CSPNet`.
 
-### `diff_utils.py` — schedules & periodic scores
+### `diff_utils.py` — schedules, periodic scores & geometric guidance
 Noise schedules (`cosine_beta_schedule`, `linear_beta_schedule`, `quadratic_beta_schedule`, `sigmoid_beta_schedule`) and the wrapped-normal functions `p_wrapped_normal(x, sigma, N=10, T=1.0)` / `d_log_p_wrapped_normal(...)` used for diffusing **fractional coordinates** (which live on a periodic torus, not ℝ³).
+
+It also holds the constrained-sampling machinery `sample_scigen` calls each step (pure torch — no `torch_scatter`, so it is unit-testable standalone):
+
+| Function | Role |
+|---|---|
+| `pinning_strength(t, T, cfg)` (+ `_linear` / `_sigmoid`) | the ramp `ψ(t)`; returns 1.0 when disabled ⇒ original binary pinning |
+| `lattice_tube_frame(lat, axis, centroid_frac)` | rebuilds `(a_hat, e1, e2, ctr, area, pn)` from the **current** lattice |
+| `transverse_scale(area, pn, area_ref, pn_ref)` | `s_t` = current/template transverse scale, + a degenerate-cell gate |
+| `apply_radial_band(...)` | confines `r` into `[r_lo, r_hi]` — **θ-invariant** |
+| `apply_density_force(...)` | steps `r` up `d/dr log ρ(r)` — **θ-invariant** |
+| `apply_angular_spread(...)` | rotates about the axis to reduce the circular resultant — **θ only**, preserves `r`/`z` exactly |
+
+Why the frame must track `lat`, and why `ψ` is split into `psi` / `psi_geom`: [technical-foundations.md](../technical-foundations.md) §5b.
 
 ### `gnn.py` — alternative encoder
 A DimeNet++-style encoder ("Adapted from the Open Catalyst Project"): `InteractionPPBlock`, `BesselBasisLayer`, `SphericalBasisLayer`, etc. Used by the supervised property model.

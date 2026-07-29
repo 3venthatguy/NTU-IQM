@@ -43,7 +43,23 @@ NTGEN offers two ways to shape generation:
 
 ## 5. Nanotube geometry cheat-sheet
 
-**Geometric shell (`SC_DBShell`).** The template's real cell fixes the tube frame — axis `a_hat` (the lattice direction the atoms fill most), transverse basis `e1, e2` (Gram-Schmidt, robust to non-orthogonal cells), and cross-section centroid. Each atom's transverse radius `r = |perp − centroid|` is confined to a band `[r_min, r_max]` measured (by percentile) from the template's own atom radii, so generation is "tube-shaped" without pinning any atom. → [structural-constraints.md](components/structural-constraints.md).
+**Geometric shell (`SC_DBShell`).** The template defines the tube frame — axis `a_hat` (the lattice direction the atoms fill most), transverse basis `e1, e2` (Gram-Schmidt, robust to non-orthogonal cells), and cross-section centroid. Each atom's transverse radius `r = |perp − centroid|` is confined to a band `[r_min, r_max]` measured (by percentile) from the template's own atom radii, so generation is "tube-shaped" without pinning any atom. → [structural-constraints.md](components/structural-constraints.md).
+
+## 5b. Geometric guidance during sampling
+
+Guidance is applied to the *intermediate* estimate `x_t` after each reverse step — never to `x_T`, which must stay a generic sample of the trained prior (uniform on the fractional torus). Three terms, all scaled by a ramp `ψ(t)` so early steps stay in-distribution:
+
+| Term | Effect | Acts on |
+|---|---|---|
+| **Radial band** (`apply_radial_band`) | confines `r` into `[r_min, r_max]` | `r` only |
+| **Density guidance** (`apply_density_force`) | nudges `r` up `d/dr log ρ(r)` onto the wall | `r` only |
+| **Angular dispersion** (`apply_angular_spread`) | descends `Σ_m w_m R̄_m²` to spread atoms in `θ` | `θ` only |
+
+**The frame must track the current lattice.** The cell is itself diffused: `l_T ~ N(0,1)` is a ~1 Å cell, growing into the real template cell (~14 Å) as `C0 = √ᾱ` rises. A frame frozen in absolute template Ångströms therefore sits *outside* the early cell — every atom shares essentially one azimuth relative to a centroid several cell-widths away. Because the two radial terms are **θ-invariant** (they compute `scale = r_target/r` and rescale `u, v`, leaving the angle untouched), that single arc is slid onto the wall and locked in permanently.
+
+`lattice_tube_frame` rebuilds `(a_hat, e1, e2, ctr)` from `l_t` each step and `transverse_scale` returns `s_t = √(A_t/A_ref)` (clamped against a linear ratio, since ~3–5 % of `randn(3,3)` draws have near-parallel transverse rows). `r_min`, `r_max`, the density grid **and the density displacement** all scale by `s_t`. At `t=0`, `s_t = 1` and this is exactly the fixed-frame behaviour. Measured over 50 real templates, the circular resultant `R` (0 = spread, 1 = one arc) runs `0.999 → 0.88` over the early trajectory with a fixed frame, versus a flat `~0.29` — the finite-`N` random floor `0.886/√N` — when tracked.
+
+**`ψ(t)` does double duty**, gating both the pinned-lattice blend and the geometric force gain. Raising `pin_psi_start` therefore fires the full-strength band at the noise-scale cell; use the separate `geom_pin_cfg` ramp instead. → [known-discrepancies.md](known-discrepancies.md) §8.
 
 **Private synthetic-ring fallback (`_SC_NanotubeFallback`).** When no real template fits the atom-count range, `shl` falls back to `n_circ` atoms evenly spaced on a circle of radius `R = bond_len / (2·sin(π / n_circ))` (adjacent ring atoms one `bond_len` apart), tube axis `c` (periodic, vertical), `a,b` a vacuum box (`2R + vacuum`). Not a user-facing mode.
 

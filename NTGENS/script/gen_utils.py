@@ -55,6 +55,15 @@ class _NanotubeTemplateDB:
         print(f'Loaded {len(self._natoms)} nanotube templates '
               f'(natoms {int(self._natoms.min())}-{int(self._natoms.max())}{src_note})')
 
+    def get(self, idx):
+        """Return (frac_coords, cell) for template `idx` -- the inverse of the
+        `_template_index` carried on each generated graph. Used by the notebooks to
+        compare a candidate's geometry against the template it was drawn from."""
+        if not self.ok:
+            return None, None
+        lo, hi = int(self._splits[idx]), int(self._splits[idx + 1])
+        return np.asarray(self._frac[lo:hi]), np.asarray(self._cells[idx])
+
     def sample(self, natm_min, natm_max, source_filter=None):
         """Return one template with natm_min <= N <= natm_max, or None if none fit.
         The caller keeps room for decoration by passing natm_max = its ceiling - 1.
@@ -337,6 +346,10 @@ class SampleDataset(Dataset):
                 # (two-sided shell).
                 r_min_ = float(bounds['r_min'])
                 centroid_ = torch.as_tensor(bounds['centroid'], dtype=torch.float)
+                # Same point in fractional coords: lattice-independent, so the
+                # sampler can rebuild the tube axis from the CURRENT (noised) cell
+                # at every reverse step instead of the template's t=0 cell.
+                centroid_frac_ = torch.as_tensor(bounds['centroid_frac'], dtype=torch.float)
                 a_hat_ = torch.as_tensor(bounds['a_hat'], dtype=torch.float)
                 e1_ = torch.as_tensor(bounds['e1'], dtype=torch.float)
                 e2_ = torch.as_tensor(bounds['e2'], dtype=torch.float)
@@ -344,6 +357,7 @@ class SampleDataset(Dataset):
                 is_alx_, r_max_, r_min_, axis_ = 0.0, 1e6, 0.0, 0
                 centroid_ = torch.zeros(3); a_hat_ = torch.zeros(3)
                 e1_ = torch.zeros(3); e2_ = torch.zeros(3)
+                centroid_frac_ = torch.full((3,), 0.5)   # box centre; unused (is_alx=0)
 
             # v2 density-guidance force table (per graph). Zero force -> no-op when
             # no template was used or guidance is disabled downstream.
@@ -372,6 +386,7 @@ class SampleDataset(Dataset):
                 r_min=torch.tensor([r_min_], dtype=torch.float),
                 tube_axis=torch.tensor([axis_], dtype=torch.long),
                 tube_centroid=centroid_.unsqueeze(0),
+                tube_centroid_frac=centroid_frac_.unsqueeze(0),
                 tube_a_hat=a_hat_.unsqueeze(0),
                 tube_e1=e1_.unsqueeze(0),
                 tube_e2=e2_.unsqueeze(0),

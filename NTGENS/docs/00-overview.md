@@ -31,7 +31,7 @@ sc_dict = {'shl': SC_DBShell, 'van': SC_Vanilla}
 
 | Key | Class | What it pins |
 |---|---|---|
-| `shl` | `SC_DBShell` | A **real tube's geometry only** — the Alexandria 1D template's cell defines a radial shell band; **no atoms are pinned**, so the model generates every atom's position and species inside the wall. |
+| `shl` | `SC_DBShell` | A **real tube's geometry only** — the Alexandria 1D template's cell defines a radial shell band (plus an optional angular-dispersion term), re-derived from the current lattice at every denoising step; **no atoms are pinned**, so the model generates every atom's position and species inside the wall. |
 | `van` | `SC_Vanilla` | **No constraint** — plain unconditional diffusion (baseline). |
 
 > Earlier atom-pinning modes (`ntb` parametric ring, `cnt` rolled-graphene wall, `alx` real structure pinned atom-by-atom) were **removed**: they pinned most or all atoms, leaving nothing for the model to generate. `shl` keeps only the shape. (A private synthetic-ring fallback, `_SC_NanotubeFallback`, survives internally as `shl`'s safety net when no template fits the requested atom-count range — it is not a user-facing mode.)

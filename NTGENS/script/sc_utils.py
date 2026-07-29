@@ -153,11 +153,18 @@ def estimate_template_bounds(frac_known, cell, r_percentile=95.0,
     """Per-template cylindrical bounds from a pinned skeleton (numpy, build time).
 
     frac_known: (N, 3) fractional coords. cell: (3, 3) row-vector lattice. Returns
-    a dict {axis, r_max, r_min, centroid, a_hat, e1, e2} where r_max is the
-    skeleton's r_percentile-th radius (a robust "tube radius" from the forensics
-    analysis), r_min is its r_lo_percentile-th radius (the wall's inner edge), and
-    the frame vectors are Cartesian (A). The sc='shl' shell uses [r_min, r_max] as
-    the band that confines every generated atom."""
+    a dict {axis, r_max, r_min, centroid, centroid_frac, a_hat, e1, e2} where r_max
+    is the skeleton's r_percentile-th radius (a robust "tube radius" from the
+    forensics analysis), r_min is its r_lo_percentile-th radius (the wall's inner
+    edge), and the frame vectors are Cartesian (A). The sc='shl' shell uses
+    [r_min, r_max] as the band that confines every generated atom.
+
+    'centroid' is the Cartesian cross-section centroid measured in the TEMPLATE's
+    own cell, so it is only valid at t=0. 'centroid_frac' is the same point in
+    fractional coordinates -- lattice-independent, so the sampler can rebuild the
+    tube axis from whatever (noised, still-shrinking) lattice it holds at step t.
+    The two are equivalent by construction: frac.mean(0) @ cell == cart.mean(0),
+    whose transverse projection is exactly `ctr`."""
     frac = np.asarray(frac_known, dtype=float) % 1.0
     cell = np.asarray(cell, dtype=float)
     cart = frac @ cell
@@ -165,8 +172,9 @@ def estimate_template_bounds(frac_known, cell, r_percentile=95.0,
     r, theta, z, ctr, a_hat, e1, e2 = cylindrical_frame(cart, cell, axis)
     r_max = float(np.percentile(r, r_percentile)) if r.size else 0.0
     r_min = float(np.percentile(r, r_lo_percentile)) if r.size else 0.0
+    ctr_frac = frac.mean(0) if frac.size else np.full(3, 0.5)
     return {'axis': int(axis), 'r_max': r_max, 'r_min': r_min, 'centroid': ctr,
-            'a_hat': a_hat, 'e1': e1, 'e2': e2}
+            'centroid_frac': ctr_frac, 'a_hat': a_hat, 'e1': e1, 'e2': e2}
 
 
 def estimate_radial_density_force(frac_known, cell, grid_size=96,

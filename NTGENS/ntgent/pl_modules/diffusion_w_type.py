@@ -22,7 +22,10 @@ from scigen.common.data_utils import (
     EPSILON, cart_to_frac_coords, mard, lengths_angles_to_volume, lattice_params_to_matrix_torch,
     frac_to_cart_coords, min_distance_sqr_pbc)
 
-from scigen.pl_modules.diff_utils import d_log_p_wrapped_normal, pinning_strength, apply_radial_band, apply_density_force
+from scigen.pl_modules.diff_utils import (d_log_p_wrapped_normal, pinning_strength,
+                                          apply_radial_band, apply_density_force,
+                                          apply_angular_spread,
+                                          lattice_tube_frame, transverse_scale)
 
 
 MAX_ATOMIC_NUM=100
@@ -242,12 +245,23 @@ def sample_scigen(self, batch, diff_ratio = 1.0, step_lr = 1e-5):
     pin_cfg = getattr(self, 'pin_cfg', None)
     cyl_cfg = getattr(self, 'cyl_cfg', None)
     dens_cfg = getattr(self, 'dens_cfg', None)
+    ang_cfg = getattr(self, 'ang_cfg', None)
+    # psi(t) does double duty: it blends the pinned lattice/skeleton AND scales the
+    # geometric guidance. Those want different schedules -- a hard-pinned lattice
+    # (psi=1 from t=T) gives the cleanest monotone cell-scale ramp, but running the
+    # guidance at full strength against a noise-scale cell wrecks the structure. An
+    # optional geom_pin_cfg ramps the forces independently; absent, behaviour is
+    # unchanged.
+    geom_cfg = getattr(self, 'geom_pin_cfg', None) or pin_cfg
     T_total = self.beta_scheduler.timesteps
 
     cyl_on = bool(cyl_cfg and cyl_cfg.get('enabled', False)) and hasattr(batch, 'is_alx')
     # v2: radial log-density guidance (concentrate atoms onto the wall within the band).
     dens_on = bool(dens_cfg and dens_cfg.get('enabled', False)) and hasattr(batch, 'dens_force')
-    geom_on = cyl_on or dens_on
+    # v3: angular dispersion (the radial terms above are theta-invariant, so nothing
+    # else ever redistributes atoms around the circumference).
+    ang_on = bool(ang_cfg and ang_cfg.get('enabled', False)) and hasattr(batch, 'is_alx')
+    geom_on = cyl_on or dens_on or ang_on
     if geom_on:
         node_batch = batch.batch
         pull_gate = batch.is_alx[node_batch]                      # (N,) 1 for tube graphs (legacy flag name)
@@ -262,31 +276,94 @@ def sample_scigen(self, batch, diff_ratio = 1.0, step_lr = 1e-5):
         e1_atom = batch.tube_e1[node_batch]
         e2_atom = batch.tube_e2[node_batch]
         max_strength = float((cyl_cfg or {}).get('max_strength', 1.0))
+        # Rebuild the tube frame from the CURRENT lattice each step instead of
+        # freezing the template's t=0 frame. The cell starts as noise (~1 A) and
+        # only grows into the template cell, so a fixed absolute-Angstrom frame sits
+        # outside the early cell and collapses every atom onto one azimuth; since
+        # the radial forces are theta-invariant, that arc is then locked in.
+        track_frame = bool((cyl_cfg or {}).get('track_frame', True))
+        tube_axis = getattr(batch, 'tube_axis', None)
+        if tube_axis is None:
+            tube_axis = torch.zeros(batch_size, dtype=torch.long, device=self.device)
+        ctr_frac = getattr(batch, 'tube_centroid_frac', None)   # None -> box centre
+        s_lo_cfg = float((cyl_cfg or {}).get('scale_lo', 0.25))
+        s_hi_cfg = float((cyl_cfg or {}).get('scale_hi', 4.0))
+        ang_min_cfg = float((cyl_cfg or {}).get('ang_min', 0.05))
+        if track_frame:
+            # Reference scale from the template cell; s_t == 1 there by construction,
+            # so at t=0 this reduces exactly to the original fixed-frame behaviour.
+            _, _, _, _, area_ref, pn_ref = lattice_tube_frame(
+                batch.lattice_known, tube_axis, ctr_frac)
     if dens_on:
         dens_force_atom = batch.dens_force[node_batch]            # (N, G)
         dens_grid_lo_atom = batch.dens_grid_lo[node_batch]        # (N,)
         dens_grid_dr_atom = batch.dens_grid_dr[node_batch]
         density_strength = float(dens_cfg.get('density_strength', 0.05))
+    if ang_on:
+        ang_strength = float(ang_cfg.get('ang_strength', 0.05))
+        ang_modes = tuple(ang_cfg.get('mode_weights', (1.0,)))
+        ang_floors = tuple(ang_cfg.get('r_floors', (0.0,) * len(ang_modes)))
+        ang_min_atoms = int(ang_cfg.get('min_atoms', 3))
+        ang_max_dtheta = float(ang_cfg.get('max_dtheta', 0.5))
+        ang_jitter = float(ang_cfg.get('jitter', 0.0))
 
     def radial_envelope(x_frac, lat, psi):
         """Shape tube-graph atoms transversely. (1) Hard band [r_lo, r_hi] confines
         them (v1); (2) log-density guidance nudges them up d/dr log rho(r) toward the
         template's wall (v2), concentrating a filled disk into a thin wall. Both
         scale with psi so early (exploratory) steps are free and late steps enforce
-        the shape. No-op unless a mode is on."""
+        the shape. No-op unless a mode is on.
+
+        With track_frame (default) the (r, theta, z) frame is rebuilt from the
+        CURRENT lattice each step and the band / density grid are scaled by the
+        transverse cell scale s_t, so the constraint stays self-consistent while the
+        cell grows from noise into the template cell. s_t -> 1 at t=0, where this is
+        exactly the legacy fixed-frame behaviour."""
         if not geom_on:
             return x_frac
         cart = frac_to_cart_coords(x_frac, None, None, batch.num_atoms, lattices=lat)
+        cart_in = cart
+        ctr_a, ah_a, e1_a, e2_a = centroid_atom, a_hat_atom, e1_atom, e2_atom
+        r_lo_a, r_hi_a, gate, s_atom = r_lo_atom, r_hi_atom, pull_gate, None
+        gl_a = dens_grid_lo_atom if dens_on else None
+        gd_a = dens_grid_dr_atom if dens_on else None
+        if track_frame:
+            a_h, e1_, e2_, ctr_, area, pn = lattice_tube_frame(lat, tube_axis, ctr_frac)
+            s, ok = transverse_scale(area, pn, area_ref, pn_ref,
+                                     s_lo_cfg, s_hi_cfg, ang_min_cfg)
+            rep = lambda x: torch.repeat_interleave(x, batch.num_atoms, dim=0)
+            ah_a, e1_a, e2_a, ctr_a = rep(a_h), rep(e1_), rep(e2_), rep(ctr_)
+            s_atom = rep(s)                                      # (N,)
+            # Degenerate cells (near-parallel transverse rows) carry no tube frame.
+            gate = pull_gate * rep(ok.to(pull_gate.dtype))
+            r_lo_a, r_hi_a = r_lo_atom * s_atom, r_hi_atom * s_atom
+            if dens_on:
+                gl_a, gd_a = dens_grid_lo_atom * s_atom, dens_grid_dr_atom * s_atom
         if cyl_on:
-            strength = (max_strength * psi) * pull_gate          # (N,)
-            cart = apply_radial_band(cart, r_lo_atom, r_hi_atom, centroid_atom,
-                                     a_hat_atom, e1_atom, e2_atom, strength)
+            strength = (max_strength * psi) * gate               # (N,)
+            cart = apply_radial_band(cart, r_lo_a, r_hi_a, ctr_a,
+                                     ah_a, e1_a, e2_a, strength)
         if dens_on:
-            d_strength = (density_strength * psi) * pull_gate    # (N,)
-            cart = apply_density_force(cart, dens_force_atom, dens_grid_lo_atom,
-                                       dens_grid_dr_atom, centroid_atom, a_hat_atom,
-                                       e1_atom, e2_atom, d_strength,
-                                       r_lo=r_lo_atom, r_hi=r_hi_atom)
+            d_strength = (density_strength * psi) * gate         # (N,)
+            if s_atom is not None:
+                # r -> s*r means the displacement must scale too, else the force is
+                # 1/s_t too strong while the cell is still small.
+                d_strength = d_strength * s_atom
+            cart = apply_density_force(cart, dens_force_atom, gl_a, gd_a,
+                                       ctr_a, ah_a, e1_a, e2_a, d_strength,
+                                       r_lo=r_lo_a, r_hi=r_hi_a)
+        if ang_on:
+            # Angle-only, so it commutes with the radial terms above; applied last
+            # so it acts on the radii they just settled.
+            a_strength = (ang_strength * psi) * gate         # (N,)
+            cart = apply_angular_spread(cart, ctr_a, ah_a, e1_a, e2_a,
+                                        node_batch, batch_size, a_strength,
+                                        mode_weights=ang_modes, r_floors=ang_floors,
+                                        min_atoms=ang_min_atoms,
+                                        max_dtheta=ang_max_dtheta, jitter=ang_jitter)
+        # Graphs with no tube (is_alx=0) carry a zero frame, which would otherwise
+        # collapse every one of their atoms onto the origin; leave them untouched.
+        cart = torch.where((gate > 0).unsqueeze(-1), cart, cart_in)
         inv_nodes = torch.repeat_interleave(torch.linalg.pinv(lat), batch.num_atoms, dim=0)
         return torch.einsum('ni,nij->nj', cart, inv_nodes) % 1.0
 
@@ -326,6 +403,7 @@ def sample_scigen(self, batch, diff_ratio = 1.0, step_lr = 1e-5):
         # Pinning strength at this step and the psi-scaled effective masks. psi==1
         # (schedule disabled) recovers the original binary masks exactly.
         psi = pinning_strength(t, T_total, pin_cfg)
+        psi_geom = pinning_strength(t, T_total, geom_cfg)   # == psi unless decoupled
         mask_x_e, mask_l_e, mask_t_e = psi * mask_x, psi * mask_l, psi * mask_t
         mask_x_ei, mask_l_ei, mask_t_ei = 1 - mask_x_e, 1 - mask_l_e, 1 - mask_t_e
         
@@ -387,7 +465,7 @@ def sample_scigen(self, batch, diff_ratio = 1.0, step_lr = 1e-5):
         x_t_minus_05 = mask_x_e * x_t_minus_05_known + mask_x_ei * x_t_minus_05_unk
         l_t_minus_05 = mask_l_e * l_t_minus_05_known + mask_l_ei * l_t_minus_05_unk
         t_t_minus_05 = mask_t_e * t_t_minus_05_known + mask_t_ei * t_t_minus_05_unk
-        x_t_minus_05 = radial_envelope(x_t_minus_05, l_t_minus_05, psi)
+        x_t_minus_05 = radial_envelope(x_t_minus_05, l_t_minus_05, psi_geom)
         
     
         # Predictor
@@ -422,7 +500,7 @@ def sample_scigen(self, batch, diff_ratio = 1.0, step_lr = 1e-5):
         x_t_minus_1 = mask_x_e * x_t_minus_1_known + mask_x_ei * x_t_minus_1_unk
         l_t_minus_1 = mask_l_e * l_t_minus_1_known + mask_l_ei * l_t_minus_1_unk
         t_t_minus_1 = mask_t_e * t_t_minus_1_known + mask_t_ei * t_t_minus_1_unk
-        x_t_minus_1 = radial_envelope(x_t_minus_1, l_t_minus_1, psi)
+        x_t_minus_1 = radial_envelope(x_t_minus_1, l_t_minus_1, psi_geom)
 
         traj[t - 1] = {
             'num_atoms' : batch.num_atoms,

@@ -42,6 +42,14 @@ sc_list = ['tri', 'hon', 'kag', 'sqr', 'elt', 'sns', 'tsq', 'srt', 'snh', 'trh',
 **If you see** `conf/default.yaml` composing `model: diffusion` and `data: default`,
 **know that** the **used** model is `diffusion_w_type` and there is **no** `conf/data/default.yaml` (only `carbon_24.yaml` / `mp_20.yaml`). Every real command overrides both: `python scigen/run.py data=mp_20 model=diffusion_w_type expname=…`. Running with the bare defaults will fail on the missing data config. → [components/configuration.md](components/configuration.md).
 
+## 8. `pin_psi_start = 1.0` looks like "pin the lattice harder" — it isn't
+**If you see** someone raising `--pin_psi_start` / `PSI_START` above `0.0` to make the pinned cell take effect earlier,
+**know that** `ψ(t)` does **double duty**: it blends the pinned lattice/skeleton *and* scales the geometric guidance (`strength = max_strength · ψ · gate`). Raising it fires the **full-strength** radial band — measured in template Ångströms, e.g. `[2.41, 5.78]` — at the `t=T` cell, which is pure noise and only ~1 Å across. Structures blow apart (measured: `pct_in` 100 % → 67 %).
+
+It also doesn't do what it appears to: at `t=T` **both** lattice branches are noise (`l_T_unk` and `l_T_known` are each `torch.randn([B,3,3])`, blended at `diffusion_w_type.py:302`), so `l_T ~ N(0,1)` **regardless of ψ** — the template cell never appears at `t=T` at all. It only emerges through the loop via `l_t_known = C0·l_0 + C1·noise`.
+
+To ramp the forces independently of the mask, use `--geom_pin_schedule` / `GEOM_PIN_SCHEDULE` (leaving `psi_start` at 0). → [components/configuration.md](components/configuration.md#generation-time-guidance-knobs), [technical-foundations.md](technical-foundations.md) §5b.
+
 ## Summary table
 
 | # | Artifact | Says | Reality |
@@ -53,6 +61,7 @@ sc_list = ['tri', 'hon', 'kag', 'sqr', 'elt', 'sns', 'tsq', 'srt', 'snh', 'trh',
 | 5 | dep list mentions `pytest` | tests exist | no tests, no requirements file |
 | 6 | comment in `gen_utils.py` | (chat prompt) | accidental noise, ignore |
 | 7 | `conf/default.yaml` | `model: diffusion`, `data: default` | use `diffusion_w_type` + a real dataset |
+| 8 | `pin_psi_start` | "pins the lattice earlier" | ψ also gates the geometric forces; `l_T` is noise either way — use `geom_pin_schedule` |
 
 ## Next
 
