@@ -50,7 +50,7 @@ docs/
 ├── usage/
 │   ├── setup.md                   Environment, symlink, config copies, checkpoint
 │   ├── workflows.md               Runnable command walkthroughs
-│   ├── inspecting-outputs.md      Tensors → pymatgen → lattice/space-group/XRD sanity checks
+│   ├── inspecting-outputs.md      Tensors → pymatgen; points to ntgen_validation.ipynb for analysis
 │   └── extending.md               Add a constraint; conventions & gotchas
 ├── glossary.md                    Domain + code terms in one place
 └── known-discrepancies.md         Stale artifacts and how to interpret them
@@ -74,7 +74,7 @@ docs/
 | [technical-foundations.md](technical-foundations.md) | understand the math/physics |
 | [usage/setup.md](usage/setup.md) | set up the environment |
 | [usage/workflows.md](usage/workflows.md) | run an end-to-end task |
-| [usage/inspecting-outputs.md](usage/inspecting-outputs.md) | sanity-check generated structures (lattice/space-group/XRD) |
+| [usage/inspecting-outputs.md](usage/inspecting-outputs.md) | tensors → pymatgen; where post-generation analysis now lives |
 | [usage/extending.md](usage/extending.md) | add a constraint / avoid gotchas |
 | [glossary.md](glossary.md) | look up a term |
 | [known-discrepancies.md](known-discrepancies.md) | avoid being misled by stale docs |

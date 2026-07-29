@@ -3,7 +3,9 @@
 > **Audience:** both. **Purpose:** how to turn raw generation tensors into inspectable structures, and three quick sanity checks to run on them.
 > ⬅ Back to [docs hub](../README.md) · Related: [generation-scripts.md](../components/generation-scripts.md), [technical-foundations.md](../technical-foundations.md)
 
-`script/generation.py` and the CLI route save raw tensors to `eval_gen_<label>.pt` (the [output contract](../components/generation-scripts.md)). The generation **notebooks** take a shortcut path: they keep the tensors in memory and convert straight to `pymatgen.Structure` objects for inspection before ever writing a CIF. This page documents that in-memory pattern — the canonical worked example is **Section 7 ("Analysis")** of [`ntgen_generation.ipynb`](../../../comp_models/NTGEN_generation/ntgen_generation.ipynb).
+`script/generation.py` and the CLI route save raw tensors to `eval_gen_<label>.pt` (the [output contract](../components/generation-scripts.md)). The generation **notebooks** take a shortcut path: they keep the tensors in memory and convert straight to `pymatgen.Structure` objects for inspection before ever writing a CIF. This page documents that in-memory pattern — the worked example is **Section 6** of [`ntgen_generation.ipynb`](../../../comp_models/NTGEN_generation/ntgen_generation.ipynb).
+
+> **Post-generation analysis moved:** `ntgen_generation.ipynb` used to run bulk-3D-crystal-style checks here (lattice parameter histograms, pymatgen space-group analysis, simulated XRD) in its own Section 7. Those were retired — as the caveats below always noted, they're a poor fit for a tube-in-vacuum cell (space group collapses to **P1**, XRD sub-15° peaks are vacuum-box artifacts). The real, nanotube-relevant analysis now lives in the sibling [`ntgen_validation.ipynb`](../../../comp_models/NTGEN_generation/ntgen_validation.ipynb): radial-band compliance / wall thickness (Tier 1 geometry), SMACT validity / occupancy ratio (Tier 2 chemistry), CHGNet energy (Tier 3), and relaxation drift (Tier 4), rolled into a composite ranking. Run it against the CIFs `ntgen_generation.ipynb` exports.
 
 ## 1. Raw tensors → `pymatgen.Structure`
 
@@ -51,9 +53,9 @@ for i in range(num_atoms.shape[0]):
 
 Wrap the conversion in a `try/except` — occasional degenerate cells (near-zero volume, extreme angles) can fail `Structure` construction; keep a `None` placeholder so downstream cells can filter (`[s for s in structures if s is not None]`) rather than crash the notebook.
 
-## 2. Three inspection techniques
+## 2. Three inspection techniques (retired — kept for reference)
 
-All three are demonstrated back-to-back in the notebook's Section 7, and mirror the same checks in the original 2D-lattice capstone notebook (`04_scigen_generation.ipynb`).
+These three were demonstrated back-to-back in `ntgen_generation.ipynb`'s old Section 7 (mirroring the checks in the original 2D-lattice capstone notebook, `04_scigen_generation.ipynb`), but that section has been removed — see the analysis-moved note above. Kept here since the pymatgen recipes are still correct if you ever want to re-add one of these checks to a notebook.
 
 ### Lattice parameter distributions
 Batch-convert all `lattices` to `(lengths, angles)` (a torch version of the same math, vectorized over the structure dimension) and histogram them. For small batches (`n < 20`, the common case on a single Colab run), fall back to a jittered strip plot so every point stays visible instead of collapsing into sparse histogram bars.
@@ -78,17 +80,19 @@ Treat all three as **relative sanity checks across your own generated candidates
 
 ## 4. Where this fits in the pipeline
 
-This in-memory inspection happens **before** CIF export, as an early quality gate — catch degenerate or obviously-wrong candidates before writing files or running them through the [GNN screening cascade](../components/gnn-screening.md). It's complementary to, not a replacement for, the CLI post-processing tools:
+The tensor→`Structure` conversion (Section 1) happens **before** CIF export, as an early quality gate — catch degenerate or obviously-wrong candidates before writing files. The actual analysis now happens afterward, against the exported CIFs, in `ntgen_validation.ipynb`. It's complementary to, not a replacement for, the CLI post-processing tools:
 
 | Tool | When to use it |
 |---|---|
-| This notebook pattern | Quick, in-memory, visual sanity check right after generation |
+| `ntgen_generation.ipynb` Section 6 | Quick, in-memory conversion + visual check right after generation |
 | `script/save_cif.py` | Persist structures to disk as CIF files |
+| `ntgen_validation.ipynb` | Tiered geometry/chemistry/CHGNet-energy/relaxation screening + composite ranking, against exported CIFs |
 | `script/eval_screen.py` | Rigorous, automated filtering (SMACT validity, GNN classifiers) before DFT |
 | `script/compute_metrics.py` | Benchmark-style aggregate metrics (validity/novelty/uniqueness/coverage) across a large batch |
 
 ## Next
 
-- The full worked example → `comp_models/NTGEN_generation/ntgen_generation.ipynb`, Section 7
+- The current worked example → `comp_models/NTGEN_generation/ntgen_generation.ipynb`, Section 6
+- The full post-generation analysis pipeline → `comp_models/NTGEN_generation/ntgen_validation.ipynb`
 - The `.pt` output contract → [components/generation-scripts.md](../components/generation-scripts.md)
 - Why the geometry looks this way → [technical-foundations.md](../technical-foundations.md)

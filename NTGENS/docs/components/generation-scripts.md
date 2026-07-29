@@ -59,7 +59,7 @@ Also here: the nanotube template DB glue — `class _NanotubeTemplateDB`, `NANOT
 | `compute_metrics.py` | `.pt` → metrics | CDVAE/DiffCSP-style validity/novelty/uniqueness/coverage; `matminer` fingerprints, Wasserstein distances. |
 | `mat_utils.py` | (library) | `get_pstruct_list`, `output_gen`, `movie_structs`, `ase2pmg`, `save_combined_cif`, etc. |
 
-**Complementary notebook path:** before running any of the above, the generation notebooks convert the raw tensors straight to `pymatgen.Structure` in memory and run lattice-parameter/space-group/XRD sanity checks — a faster, visual first pass than `compute_metrics.py`. See [usage/inspecting-outputs.md](../usage/inspecting-outputs.md).
+**Complementary notebook path:** before running any of the above, `ntgen_generation.ipynb` converts the raw tensors straight to `pymatgen.Structure` in memory (Section 6) and exports CIFs (Section 7) — a faster, visual first pass. The sibling `ntgen_validation.ipynb` then runs the actual post-generation analysis (geometry/chemistry/CHGNet-energy/relaxation tiers + composite ranking) against those CIFs, ahead of `compute_metrics.py`. See [usage/inspecting-outputs.md](../usage/inspecting-outputs.md).
 
 ## Batch drivers (top level)
 - **`gen_mul.py`** — edit the params block (`dataset`, `batch_size`, `num_batches_to_samples`, `sc_list`, `atom_list`, `frac_z`, `sc_natm_range`, …) then `python gen_mul.py`; it loops `sc_list × num_run` and shells out to `script/generation.py`, optionally calling `save_cif.py`. Current defaults target the geometric shell: `dataset='mp_20'`, `sc_list=['shl']`, `sc_natm_range={'shl': [24, 64], 'van': [1, 20]}`.

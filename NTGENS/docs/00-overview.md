@@ -46,7 +46,8 @@ NTU-IQM/
 ├── comp_models/     ← companion material:
 │   ├── DiffCSP-main/         upstream, unmodified DiffCSP reference
 │   └── NTGEN_generation/     the driver notebooks:
-│       ├── ntgen_generation.ipynb    (sc='shl', Alexandria tube geometry + mp_20)
+│       ├── ntgen_generation.ipynb    (sc='shl', Alexandria tube geometry + mp_20; generate + export CIFs)
+│       ├── ntgen_validation.ipynb    (post-generation analysis: geometry/chemistry/CHGNet/relaxation tiers + ranking)
 │       └── 04_scigen_generation.ipynb (original 2D-lattice SCIGEN demo)
 └── README.md
 ```

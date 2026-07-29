@@ -77,7 +77,7 @@ python script/compute_metrics.py --label myrun
 → validity / novelty / uniqueness / coverage metrics (CDVAE/DiffCSP-style).
 
 ## 8. Inspect outputs (notebook)
-For a quick, in-memory sanity check before exporting anything, use the generation notebook directly — see **Section 7 ("Analysis")** of `ntgen_generation.ipynb`: lattice parameter distributions, space-group analysis, and simulated XRD, run straight on the freshly generated `structures` list. Full pattern + nanotube-specific caveats: [inspecting-outputs.md](inspecting-outputs.md).
+`ntgen_generation.ipynb` itself only inspects the raw generated tensors (Section 6) and the diffusion trajectory (Section 6b), then exports CIFs (Section 7). Deeper sanity checks — lattice parameter distributions, geometry/chemistry screening, CHGNet energies, relaxation drift — live in the sibling `ntgen_validation.ipynb`, run against the exported CIFs. Full pattern + nanotube-specific caveats: [inspecting-outputs.md](inspecting-outputs.md).
 
 ## Quick reference
 
@@ -91,7 +91,7 @@ For a quick, in-memory sanity check before exporting anything, use the generatio
 | Screen | `python script/eval_screen.py --label X` |
 | Movie | `python script/traj_movie.py --label X --idx_list …` |
 | Metrics | `python script/compute_metrics.py --label X` |
-| Inspect (notebook) | `ntgen_generation.ipynb` Section 7 — see [inspecting-outputs.md](inspecting-outputs.md) |
+| Inspect (notebook) | `ntgen_validation.ipynb` — see [inspecting-outputs.md](inspecting-outputs.md) |
 
 ## Next
 
